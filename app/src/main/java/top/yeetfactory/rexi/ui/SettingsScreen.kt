@@ -66,6 +66,8 @@ private sealed interface Editing {
 
     data object NoLock : Editing
 
+    data object LockAfter : Editing
+
     data class Restore(
         val text: String,
     ) : Editing
@@ -220,6 +222,15 @@ internal fun SettingsScreen(
                     },
                     subtitle = "Fingerprint or PIN to open the app",
                 )
+                if (settings.appLock) {
+                    RowLine()
+                    SettingRow(
+                        "Lock again",
+                        { editing = Editing.LockAfter },
+                        subtitle = "Once you leave Rexi",
+                        value = lockAfter(settings.lockAfterSeconds),
+                    )
+                }
                 RowLine()
                 ToggleRow(
                     "Hide names in notifications",
@@ -352,6 +363,19 @@ internal fun SettingsScreen(
             ) { editing = null }
         }
 
+        Editing.LockAfter -> {
+            ChoiceDialog(
+                title = "Lock again",
+                options = LOCK_AFTER_SECONDS.map { it to lockAfter(it) },
+                selected = settings.lockAfterSeconds,
+                onPick = { seconds ->
+                    change { it.copy(lockAfterSeconds = seconds) }
+                    editing = null
+                },
+                onDismiss = { editing = null },
+            )
+        }
+
         is Editing.Restore -> {
             ConfirmDialog(
                 title = "Replace everything?",
@@ -385,6 +409,32 @@ internal fun SettingsScreen(
 }
 
 private fun hours(value: Int): String = if (value == 1) "1 hour" else "$value hours"
+
+private fun lockAfter(seconds: Int): String =
+    when {
+        seconds == 0 -> {
+            "Immediately"
+        }
+
+        seconds < SECONDS_PER_HOUR -> {
+            if (seconds ==
+                SECONDS_PER_MINUTE
+            ) {
+                "After 1 minute"
+            } else {
+                "After ${seconds / SECONDS_PER_MINUTE} minutes"
+            }
+        }
+
+        else -> {
+            "After ${hours(seconds / SECONDS_PER_HOUR)}"
+        }
+    }
+
+private const val SECONDS_PER_MINUTE = 60
+private const val SECONDS_PER_HOUR = 3_600
+
+private val LOCK_AFTER_SECONDS = listOf(0, 60, 300, 900, 3_600)
 
 /** One part of the day and its time, two to a row so "10:00 PM" fits on one line. */
 @Composable

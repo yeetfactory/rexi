@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -125,7 +126,7 @@ internal fun NumberDialog(
     onDismiss: () -> Unit,
 ) {
     val palette = LocalPalette.current
-    var text by remember {
+    var text by rememberSaveable {
         mutableStateOf(
             if (initial > 0) {
                 top.yeetfactory.rexi.core.Format

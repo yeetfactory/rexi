@@ -1,11 +1,13 @@
 package top.yeetfactory.rexi.data
 
+import android.os.Parcelable
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
+import kotlinx.parcelize.Parcelize
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.DoseUnit
@@ -24,8 +26,10 @@ import java.time.ZoneId
 
 /**
  * One medicine, of any kind. Nothing here assumes a pill: a dose is an amount of [unit], the drawing is one of
- * [MedKind], and the supply is either counted or timed.
+ * [MedKind], and the supply is either counted or timed. It's Parcelable because the edit page keeps the saved
+ * medicine it started from while Android rebuilds the screen.
  */
+@Parcelize
 @Entity(tableName = "medicine")
 data class Medicine(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -64,7 +68,7 @@ data class Medicine(
     val paused: Boolean = false,
     val archived: Boolean = false,
     val createdAt: Long = 0,
-) {
+) : Parcelable {
     val strengthText: String get() = if (strength.isBlank()) "" else "${strength.trim()} $strengthUnit"
 
     val title: String get() = name.ifBlank { "Untitled" }

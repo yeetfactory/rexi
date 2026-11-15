@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.biometric.BiometricManager.Authenticators
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedContent
@@ -52,11 +53,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import top.yeetfactory.rexi.core.AppLock
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.remind.RexiReceiver
 import top.yeetfactory.rexi.ui.AddFlow
 import top.yeetfactory.rexi.ui.AsNeededSheet
+import top.yeetfactory.rexi.ui.EditMedicine
 import top.yeetfactory.rexi.ui.HistoryScreen
 import top.yeetfactory.rexi.ui.LocalPalette
 import top.yeetfactory.rexi.ui.LockScreen
@@ -75,27 +81,26 @@ import java.time.LocalDate
 class MainActivity : FragmentActivity() {
     /** A screen a notification asked for, waiting for the navigation to pick it up. */
     private val requestedRoute = mutableStateOf<String?>(null)
-    private val locked = mutableStateOf(false)
-    private var stoppedAt = 0L
 
     private val app: RexiApp get() = application as RexiApp
+
+    private val lock: LockModel by viewModels {
+        viewModelFactory { initializer { LockModel(app.settings.value.appLock) } }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Android remembers this itself. Setting it again keeps it right after a restore.
         getSystemService(UiModeManager::class.java).setApplicationNightMode(app.settings.value.theme.nightMode)
         refreshBars()
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) {
-            handle(intent)
-            locked.value = app.settings.value.appLock
-        }
+        if (savedInstanceState == null) handle(intent)
         RexiReceiver.noteZone(app)
         setContent {
             RexiTheme {
                 Root(
                     app = app,
                     requested = requestedRoute.value,
-                    locked = locked.value,
+                    locked = lock.locked,
                     onClearRequest = { requestedRoute.value = null },
                     onUnlock = ::unlock,
                 )
@@ -110,14 +115,15 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        val away = SystemClock.elapsedRealtime() - stoppedAt
-        if (app.settings.value.appLock && stoppedAt > 0 && away > LOCK_AFTER_MS) locked.value = true
+        val settings = app.settings.value
+        lock.comeBack(SystemClock.elapsedRealtime(), settings.appLock, settings.lockAfterSeconds * MS_PER_SECOND)
         app.changed()
     }
 
     override fun onStop() {
         super.onStop()
-        stoppedAt = SystemClock.elapsedRealtime()
+        // Turning the phone stops this screen for a moment while Android rebuilds it. That isn't leaving.
+        if (!isChangingConfigurations) lock.leave(SystemClock.elapsedRealtime())
     }
 
     private fun handle(intent: Intent) {
@@ -138,7 +144,7 @@ class MainActivity : FragmentActivity() {
                 mainExecutor,
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        locked.value = false
+                        lock.unlock()
                     }
                 },
             )
@@ -155,8 +161,37 @@ class MainActivity : FragmentActivity() {
     companion object {
         const val EXTRA_ROUTE = "route"
 
-        /** Leaving the app for a share sheet or a file picker shouldn't lock it, so it locks after a minute away. */
-        private const val LOCK_AFTER_MS = 60_000L
+        private const val MS_PER_SECOND = 1_000L
+    }
+}
+
+/**
+ * The app lock, kept in a ViewModel so Android rebuilding the screen, as it does when the phone turns, can't open it
+ * unlocked. Android makes a new one whenever it starts this screen afresh, including after it closed Rexi in the
+ * background, and a new one starts locked.
+ */
+internal class LockModel(
+    enabled: Boolean,
+) : ViewModel() {
+    private val lock = AppLock(enabled)
+
+    var locked by mutableStateOf(lock.locked)
+        private set
+
+    fun leave(now: Long) = lock.leave(now)
+
+    fun comeBack(
+        now: Long,
+        enabled: Boolean,
+        afterMs: Long,
+    ) {
+        lock.comeBack(now, enabled, afterMs)
+        locked = lock.locked
+    }
+
+    fun unlock() {
+        lock.unlock()
+        locked = lock.locked
     }
 }
 
@@ -259,7 +294,14 @@ private fun Home(
         stack = stack + route
     }
 
+    // A screen keeps what was typed while Android rebuilds it, under its route. Leaving it must drop that, or adding
+    // again, or editing the same medicine again, would open with what was discarded last time.
+    fun leave(routes: List<String>) {
+        routes.forEach(holder::removeState)
+    }
+
     fun pop() {
+        leave(stack.takeLast(1))
         stack = stack.dropLast(1)
     }
 
@@ -268,6 +310,7 @@ private fun Home(
         when (bits[0]) {
             "today" -> {
                 tabName = Tab.TODAY.name
+                leave(stack)
                 stack = emptyList()
             }
 
@@ -313,16 +356,17 @@ private fun Home(
                         medId = id,
                         onBack = ::pop,
                         onEdit = { push("edit:$it") },
+                        onKeepTrack = { push("edit:$it:supply") },
                         askRefill = bits.getOrNull(2) == "refill",
                     )
                 }
 
                 "edit" -> {
-                    AddFlow(app = app, editId = id, onSave = { pop() }, onCancel = ::pop)
+                    EditMedicine(app = app, medId = id, onSave = ::pop, onCancel = ::pop, atSupply = bits.getOrNull(2) == "supply")
                 }
 
                 else -> {
-                    AddFlow(app = app, editId = null, onSave = { pop() }, onCancel = ::pop)
+                    AddFlow(app = app, onSave = { pop() }, onCancel = ::pop)
                 }
             }
         }

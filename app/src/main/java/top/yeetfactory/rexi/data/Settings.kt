@@ -30,6 +30,11 @@ data class AppSettings(
     val quietEnd: Int = 7 * 60,
     val missedAfterHours: Int = 3,
     val appLock: Boolean = false,
+    /**
+     * How long someone can be away before the app lock asks again. A minute by default, so stepping out to a file
+     * picker or the share sheet doesn't lock it. Zero asks every time.
+     */
+    val lockAfterSeconds: Int = 60,
     val hideNames: Boolean = false,
     val theme: ThemeMode = ThemeMode.SYSTEM,
     val onboarded: Boolean = false,
@@ -74,6 +79,7 @@ class SettingsStore(
             quietEnd = prefs.getInt("quietEnd", 7 * 60),
             missedAfterHours = prefs.getInt("missedAfterHours", 3),
             appLock = prefs.getBoolean("appLock", false),
+            lockAfterSeconds = prefs.getInt("lockAfterSeconds", 60),
             hideNames = prefs.getBoolean("hideNames", false),
             theme =
                 prefs
@@ -97,6 +103,7 @@ class SettingsStore(
             putInt("quietEnd", value.quietEnd)
             putInt("missedAfterHours", value.missedAfterHours)
             putBoolean("appLock", value.appLock)
+            putInt("lockAfterSeconds", value.lockAfterSeconds)
             putBoolean("hideNames", value.hideNames)
             putString("theme", value.theme.name)
             putBoolean("onboarded", value.onboarded)

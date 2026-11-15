@@ -1,5 +1,6 @@
 package top.yeetfactory.rexi.ui
 
+import android.os.Parcelable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -40,18 +41,24 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.parcelize.Parcelize
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseUnit
@@ -70,8 +77,13 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlin.math.roundToInt
 
-/** Everything the add flow collects, before it becomes a [Medicine]. Editing starts from the saved medicine. */
+/**
+ * Everything the add flow collects, before it becomes a [Medicine]. Editing starts from the saved medicine. It's
+ * Parcelable so what was typed survives Android rebuilding the screen, such as when the phone turns.
+ */
+@Parcelize
 internal data class Draft(
     val base: Medicine? = null,
     val name: String = "",
@@ -104,8 +116,23 @@ internal data class Draft(
     val supplyCount: Double = 30.0,
     val packDays: Int = 30,
     val refillLeadDays: Int = 7,
-) {
-    val editing: Boolean get() = base != null
+) : Parcelable {
+    val hasName: Boolean get() = name.isNotBlank()
+
+    /** A schedule needs a part of the day, and "some days" needs a day. Taking it only when needed needs neither. */
+    val hasSchedule: Boolean
+        get() = frequency == Frequency.AS_NEEDED || (parts.isNotEmpty() && (frequency != Frequency.SOME_DAYS || daysMask != 0))
+
+    /** The name with its strength, such as "Metformin 500 mg". */
+    fun label(): String =
+        name.trim() +
+            strength
+                .takeIf { it.isNotBlank() }
+                ?.let { " $it $strengthUnit" }
+                .orEmpty()
+
+    /** Someone who tapped "Keep track" wants it on, counted or timed the way adding would choose for this unit. */
+    fun trackingSupply(): Draft = if (supplyMode == SupplyMode.NONE) copy(supplyMode = usualSupply(unit)) else this
 
     fun amount(part: DayPart): Double = if (perPart) amounts[part] ?: eachTime else eachTime
 
@@ -116,18 +143,9 @@ internal data class Draft(
 
     fun withUnit(unit: DoseUnit): Draft = copy(unitChosen = true).counting(unit)
 
-    private fun counting(unit: DoseUnit): Draft =
-        copy(
-            unit = unit,
-            supplyMode =
-                if (supplyChosen) {
-                    supplyMode
-                } else if (unit.countable) {
-                    SupplyMode.COUNT
-                } else {
-                    SupplyMode.DURATION
-                },
-        )
+    private fun counting(unit: DoseUnit): Draft = copy(unit = unit, supplyMode = if (supplyChosen) supplyMode else usualSupply(unit))
+
+    private fun usualSupply(unit: DoseUnit): SupplyMode = if (unit.countable) SupplyMode.COUNT else SupplyMode.DURATION
 
     fun startDay(today: LocalDate): LocalDate {
         val prior = base?.startDay?.let(LocalDate::ofEpochDay)
@@ -235,33 +253,21 @@ internal data class Draft(
     }
 }
 
+/** Adding a medicine, one step at a time, because each answer shapes the next: what it is decides how a dose is counted. */
 @Composable
 internal fun AddFlow(
     app: RexiApp,
-    editId: Long?,
     onSave: (Long) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    var draft by remember { mutableStateOf<Draft?>(if (editId == null) Draft() else null) }
-    // What the flow opened with, so leaving only asks first when something would be lost.
-    var initial by remember { mutableStateOf(draft) }
-    var step by remember { mutableIntStateOf(1) }
-    var confirmLeave by remember { mutableStateOf(false) }
-    LaunchedEffect(editId) {
-        if (editId != null) {
-            val loaded =
-                app.repository.dao
-                    .medicine(editId)
-                    ?.let(Draft::from) ?: Draft()
-            draft = loaded
-            initial = loaded
-        }
-    }
-    val leave = { if (draft != initial) confirmLeave = true else onCancel() }
+    var current by rememberSaveable { mutableStateOf(Draft()) }
+    var step by rememberSaveable { mutableIntStateOf(1) }
+    var confirmLeave by rememberSaveable { mutableStateOf(false) }
+    // Leaving only asks first when something would be lost.
+    val leave = { if (current != Draft()) confirmLeave = true else onCancel() }
     BackHandler { if (step > 1) step-- else leave() }
-    val current = draft ?: return
     val today = app.repository.today()
 
     Column(modifier.fillMaxSize().imePadding()) {
@@ -295,40 +301,45 @@ internal fun AddFlow(
                     .padding(top = 20.dp, bottom = 16.dp),
             ) {
                 when (shown) {
-                    1 -> WhatStep(current) { draft = it }
-                    2 -> LookStep(current) { draft = it }
-                    3 -> WhenStep(current, today, app.settings.value.partMinutes, rememberUse24h()) { draft = it }
-                    else -> SupplyStep(current, today) { draft = it }
+                    1 -> {
+                        StepTitle("What are you adding?")
+                        Spacer(Modifier.height(22.dp))
+                        WhatStep(current) { current = it }
+                    }
+
+                    2 -> {
+                        StepTitle(LOOK_TITLE, subtitle = LOOK_SUBTITLE)
+                        Spacer(Modifier.height(18.dp))
+                        LookStep(current) { current = it }
+                    }
+
+                    3 -> {
+                        StepTitle(WHEN_TITLE, subtitle = current.label())
+                        Spacer(Modifier.height(20.dp))
+                        WhenStep(current, today, app.settings.value.partMinutes, rememberUse24h()) { current = it }
+                    }
+
+                    else -> {
+                        StepTitle(SUPPLY_TITLE, subtitle = SUPPLY_SUBTITLE)
+                        Spacer(Modifier.height(18.dp))
+                        SupplyStep(current, today) { current = it }
+                    }
                 }
             }
         }
         val ready =
             when (step) {
-                1 -> {
-                    current.name.isNotBlank()
-                }
-
-                3 -> {
-                    current.frequency == Frequency.AS_NEEDED ||
-                        (current.parts.isNotEmpty() && (current.frequency != Frequency.SOME_DAYS || current.daysMask != 0))
-                }
-
-                else -> {
-                    true
-                }
+                1 -> current.hasName
+                3 -> current.hasSchedule
+                else -> true
             }
         Box(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp, top = 8.dp)) {
             if (step < STEPS) {
                 PrimaryButton("Continue", { step++ }, enabled = ready, modifier = Modifier.fillMaxWidth())
             } else {
                 PrimaryButton(
-                    if (current.editing) "Save changes" else "Save ${current.name.trim()}",
-                    {
-                        scope.launch {
-                            val id = app.repository.save(current.toMedicine(today), current.slots())
-                            onSave(id)
-                        }
-                    },
+                    "Save ${current.name.trim()}",
+                    { scope.launch { onSave(app.repository.save(current.toMedicine(today), current.slots())) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -336,8 +347,8 @@ internal fun AddFlow(
     }
     if (confirmLeave) {
         ConfirmDialog(
-            title = if (current.editing) "Discard your changes?" else "Discard this medicine?",
-            text = if (current.editing) "Your changes won't be saved." else "What you've entered so far won't be saved.",
+            title = "Discard this medicine?",
+            text = "What you've entered so far won't be saved.",
             confirm = "Discard",
             onConfirm = onCancel,
             onDismiss = { confirmLeave = false },
@@ -346,15 +357,126 @@ internal fun AddFlow(
     }
 }
 
+/**
+ * Changing a saved medicine, on one page. Adding goes step by step, but an edit is usually one change, and walking
+ * through four steps to reach it was slow. With [atSupply] it opens on supply, for the "Keep track" button.
+ */
+@Composable
+internal fun EditMedicine(
+    app: RexiApp,
+    medId: Long,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    atSupply: Boolean = false,
+) {
+    val scope = rememberCoroutineScope()
+    var draft by rememberSaveable { mutableStateOf<Draft?>(null) }
+    // What the page opened with, so leaving only asks first when something would be lost.
+    var initial by rememberSaveable { mutableStateOf<Draft?>(null) }
+    var confirmLeave by rememberSaveable { mutableStateOf(false) }
+    // Restoring a backup replaces every medicine, so the one asked for may no longer be there.
+    val gone by rememberUpdatedState(onCancel)
+    LaunchedEffect(medId) {
+        // After Android rebuilds the screen the page already holds the person's unsaved changes. Loading would wipe them.
+        if (draft != null) return@LaunchedEffect
+        val saved =
+            app.repository.dao
+                .medicine(medId)
+                ?.let(Draft::from)
+        if (saved == null) {
+            gone()
+        } else {
+            // Turned on before the page shows, so backing out without touching anything doesn't ask to discard.
+            val opened = if (atSupply) saved.trackingSupply() else saved
+            draft = opened
+            initial = opened
+        }
+    }
+    val leave = { if (draft != initial) confirmLeave = true else onCancel() }
+    BackHandler(onBack = leave)
+    val current = draft ?: return
+    val today = app.repository.today()
+    val scroll = rememberScrollState()
+    var supplyTop by remember { mutableStateOf<Int?>(null) }
+    var jumped by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(supplyTop) {
+        val top = supplyTop
+        if (atSupply && !jumped && top != null) {
+            scroll.scrollTo(top)
+            jumped = true
+        }
+    }
+
+    Column(modifier.fillMaxSize().imePadding()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 24.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconCircleButton(RexiIcons.Close, "Cancel", leave)
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(scroll)
+                .padding(horizontal = 24.dp)
+                .padding(top = 20.dp, bottom = 16.dp),
+        ) {
+            StepTitle("Edit ${current.base?.title}")
+            Spacer(Modifier.height(22.dp))
+            WhatStep(current) { draft = it }
+            Spacer(Modifier.height(SECTION_GAP))
+            StepTitle(LOOK_TITLE, subtitle = LOOK_SUBTITLE, style = Type.heading)
+            Spacer(Modifier.height(16.dp))
+            LookStep(current) { draft = it }
+            Spacer(Modifier.height(SECTION_GAP))
+            StepTitle(WHEN_TITLE, style = Type.heading)
+            Spacer(Modifier.height(16.dp))
+            WhenStep(current, today, app.settings.value.partMinutes, rememberUse24h()) { draft = it }
+            Spacer(Modifier.height(SECTION_GAP))
+            Column(Modifier.onPlaced { supplyTop = it.positionInParent().y.roundToInt() }) {
+                StepTitle(SUPPLY_TITLE, subtitle = SUPPLY_SUBTITLE, style = Type.heading)
+                Spacer(Modifier.height(16.dp))
+                SupplyStep(current, today) { draft = it }
+            }
+        }
+        Box(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp, top = 8.dp)) {
+            PrimaryButton(
+                "Save changes",
+                {
+                    scope.launch {
+                        app.repository.save(current.toMedicine(today), current.slots())
+                        onSave()
+                    }
+                },
+                enabled = current.hasName && current.hasSchedule,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+    if (confirmLeave) {
+        ConfirmDialog(
+            title = "Discard your changes?",
+            text = "Your changes won't be saved.",
+            confirm = "Discard",
+            onConfirm = onCancel,
+            onDismiss = { confirmLeave = false },
+            danger = true,
+        )
+    }
+}
+
+/** A step's title in the add flow. The edit page uses the same words, smaller, as section headings. */
 @Composable
 private fun StepTitle(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    style: androidx.compose.ui.text.TextStyle = Type.title,
 ) {
     val palette = LocalPalette.current
     Column(modifier) {
-        Text(title, style = Type.title, color = palette.ink)
+        Text(title, style = style, color = palette.ink, modifier = Modifier.semantics { heading() })
         if (subtitle != null) {
             Spacer(Modifier.height(6.dp))
             Text(subtitle, style = Type.text, color = palette.muted)
@@ -380,8 +502,6 @@ private fun ColumnScope.WhatStep(
     draft: Draft,
     onChange: (Draft) -> Unit,
 ) {
-    StepTitle(if (draft.editing) "Edit ${draft.base?.title}" else "What are you adding?")
-    Spacer(Modifier.height(22.dp))
     Field("Name", draft.name, {
         onChange(draft.copy(name = it))
     }, placeholder = "e.g. Metformin", capitalization = KeyboardCapitalization.Words)
@@ -413,9 +533,7 @@ private fun ColumnScope.LookStep(
     onChange: (Draft) -> Unit,
 ) {
     val palette = LocalPalette.current
-    var half by remember { mutableIntStateOf(0) }
-    StepTitle("What is it?", subtitle = "Pick the closest match. Anything else goes under Other.")
-    Spacer(Modifier.height(18.dp))
+    var half by rememberSaveable { mutableIntStateOf(0) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -508,7 +626,7 @@ private fun UnitPicker(
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
-    var choosing by remember { mutableStateOf(false) }
+    var choosing by rememberSaveable { mutableStateOf(false) }
     val open = choosing || draft.kind == MedKind.OTHER
     Column(modifier) {
         if (open) {
@@ -557,13 +675,6 @@ private fun ColumnScope.WhenStep(
     onChange: (Draft) -> Unit,
 ) {
     val palette = LocalPalette.current
-    val strength =
-        draft.strength
-            .takeIf { it.isNotBlank() }
-            ?.let { " $it ${draft.strengthUnit}" }
-            .orEmpty()
-    StepTitle("When do you take it?", subtitle = "${draft.name.trim()}$strength")
-    Spacer(Modifier.height(20.dp))
     FieldLabel("How often")
     Spacer(Modifier.height(10.dp))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -829,12 +940,7 @@ private fun ColumnScope.SupplyStep(
     onChange: (Draft) -> Unit,
 ) {
     val palette = LocalPalette.current
-    var typing by remember { mutableStateOf(false) }
-    StepTitle(
-        "Keep track of supply",
-        subtitle = "Count what's left, or just say how long a pack lasts. Either way you're warned before you run out.",
-    )
-    Spacer(Modifier.height(18.dp))
+    var typing by rememberSaveable { mutableStateOf(false) }
     val modes = listOf(SupplyMode.COUNT, SupplyMode.DURATION, SupplyMode.NONE)
     Segmented(
         listOf("Count it", "Time it", "Off"),
@@ -931,12 +1037,7 @@ private fun ColumnScope.SupplyStep(
             MedIcon(draft.kind, draft.color1, draft.color2, size = 44.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                val strength =
-                    draft.strength
-                        .takeIf { it.isNotBlank() }
-                        ?.let { " $it ${draft.strengthUnit}" }
-                        .orEmpty()
-                Text(draft.name.trim() + strength, style = Type.body, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(draft.label(), style = Type.body, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(5.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (draft.frequency == Frequency.AS_NEEDED) {
@@ -1037,6 +1138,15 @@ private fun summary(
 }
 
 private const val STEPS = 4
+
+// The add flow's step titles, which the edit page uses as its section headings.
+private const val LOOK_TITLE = "What is it?"
+private const val LOOK_SUBTITLE = "Pick the closest match. Anything else goes under Other."
+private const val WHEN_TITLE = "When do you take it?"
+private const val SUPPLY_TITLE = "Keep track of supply"
+private const val SUPPLY_SUBTITLE = "Count what's left, or just say how long a pack lasts. Either way you're warned before you run out."
+
+private val SECTION_GAP = 40.dp
 private const val KINDS_PER_ROW = 4
 private const val MAX_AMOUNT = 40.0
 private const val MAX_GAP_HOURS = 48

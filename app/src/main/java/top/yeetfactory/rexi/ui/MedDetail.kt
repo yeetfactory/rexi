@@ -58,6 +58,7 @@ internal fun MedDetailScreen(
     medId: Long,
     onBack: () -> Unit,
     onEdit: (Long) -> Unit,
+    onKeepTrack: (Long) -> Unit,
     modifier: Modifier = Modifier,
     askRefill: Boolean = false,
 ) {
@@ -126,7 +127,7 @@ internal fun MedDetailScreen(
             Spacer(Modifier.height(18.dp))
             WhenSection(med, today, settings.partMinutes, use24)
             Spacer(Modifier.height(14.dp))
-            SupplySection(med, today, onRefill = { refilling = true }, onTrack = { onEdit(med.id) })
+            SupplySection(med, today, onRefill = { refilling = true }, onKeepTrack = { onKeepTrack(med.id) })
             Spacer(Modifier.height(14.dp))
             RecentSection(
                 med = med,
@@ -304,7 +305,7 @@ private fun SupplySection(
     med: MedicineWithSlots,
     today: LocalDate,
     onRefill: () -> Unit,
-    onTrack: () -> Unit,
+    onKeepTrack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
@@ -321,7 +322,7 @@ private fun SupplySection(
                     color = palette.muted,
                 )
                 Spacer(Modifier.height(12.dp))
-                SoftButton("Keep track", onTrack, background = palette.well)
+                SoftButton("Keep track", onKeepTrack, background = palette.well)
             }
 
             else -> {

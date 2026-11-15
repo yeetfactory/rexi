@@ -3,6 +3,8 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // Lets the add and edit forms keep what was typed when Android rebuilds the screen, such as when the phone turns.
+    alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.ksp)
 }
 
