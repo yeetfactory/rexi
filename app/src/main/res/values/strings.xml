@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rexi</string>
+    <string name="widget_today_name">Today</string>
+    <string name="widget_today_description">Today\'s pillbox, with a Take button for the dose that\'s due.</string>
+    <string name="widget_next_name">Next dose</string>
+    <string name="widget_next_description">The dose that\'s due now, or the next one.</string>
+</resources>

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Rexi the T-rex in a hospital cap, slightly cross-eyed and grinning, hugging a capsule far too big for those
+    tiny arms. The body runs off the bottom on purpose, so every launcher shape crops it like a portrait.
+    The cross on the cap is blue: a red cross on white is the protected Red Cross emblem.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shrunk a little towards the bottom, to leave room for the cap inside a round mask. -->
+    <group
+        android:pivotX="54"
+        android:pivotY="100"
+        android:scaleX="0.9"
+        android:scaleY="0.9">
+        <!-- Back spikes, behind the body. -->
+        <path
+            android:fillColor="#FFB938"
+            android:strokeColor="#FFB938"
+            android:strokeWidth="2"
+            android:strokeLineJoin="round"
+            android:pathData="M40,25L32,22L36,31Z M33,34L25,35L32,42Z M32,45L25,48L33,53Z" />
+        <!-- Head and body. -->
+        <path
+            android:fillColor="#F0683F"
+            android:pathData="M26,108C26,82 28,64 34,52C30,40 34,24 50,22C62,20 72,24 78,32C82,36 84,42 82,47C80,53 73,56.5 65.5,57.5C62.5,58 62,61 63.5,64.5C67.5,73 71,88 71,108Z" />
+        <!-- Belly, kept inside the body. -->
+        <group>
+            <clip-path android:pathData="M26,108C26,82 28,64 34,52C30,40 34,24 50,22C62,20 72,24 78,32C82,36 84,42 82,47C80,53 73,56.5 65.5,57.5C62.5,58 62,61 63.5,64.5C67.5,73 71,88 71,108Z" />
+            <path android:fillColor="#FFD9B8" android:pathData="M61,64C69,77 72,92 72,108L45,108C46,90 51,75 61,64Z" />
+        </group>
+        <!-- The far eye peeks over the snout. The pupils point a little towards each other. -->
+        <path android:fillColor="#FFFFFF" android:pathData="M61.8,31a5.2,5.2 0,1 0,10.4 0a5.2,5.2 0,1 0,-10.4 0" />
+        <path android:fillColor="#1F2A44" android:pathData="M62.5,32a2.9,2.9 0,1 0,5.8 0a2.9,2.9 0,1 0,-5.8 0" />
+        <path android:fillColor="#FFFFFF" android:pathData="M65.2,30.8a1,1 0,1 0,2 0a1,1 0,1 0,-2 0" />
+        <path android:fillColor="#FFFFFF" android:pathData="M48.7,35a6.8,6.8 0,1 0,13.6 0a6.8,6.8 0,1 0,-13.6 0" />
+        <path android:fillColor="#1F2A44" android:pathData="M54.3,36.2a4,4 0,1 0,8 0a4,4 0,1 0,-8 0" />
+        <path android:fillColor="#FFFFFF" android:pathData="M58.2,34.6a1.4,1.4 0,1 0,2.8 0a1.4,1.4 0,1 0,-2.8 0" />
+        <!-- Nostril and cheek. -->
+        <path android:fillColor="#A83E22" android:pathData="M78.7,38a1.3,0.9 0,1 0,2.6 0a1.3,0.9 0,1 0,-2.6 0" />
+        <path android:fillColor="#FF9C8A" android:pathData="M60.8,45a3.2,2 0,1 0,6.4 0a3.2,2 0,1 0,-6.4 0" />
+        <!-- The open grin, with the tongue kept inside it, and two teeth. -->
+        <path
+            android:fillColor="#7A2418"
+            android:pathData="M62.5,49.5C68,51.8 75,51.2 80,46C79.5,51 75.5,55 70,55.3C66.3,55.5 63.6,53 62.5,49.5Z" />
+        <group>
+            <clip-path android:pathData="M62.5,49.5C68,51.8 75,51.2 80,46C79.5,51 75.5,55 70,55.3C66.3,55.5 63.6,53 62.5,49.5Z" />
+            <path android:fillColor="#FF8FA0" android:pathData="M64.5,56a5.5,3.4 0,1 0,11 0a5.5,3.4 0,1 0,-11 0" />
+        </group>
+        <path android:fillColor="#FFFFFF" android:pathData="M68.6,51.3L70.1,54L71.6,51.1Z M74.3,50.3L75.6,52.8L77,49.7Z" />
+        <!-- The capsule, held up towards the mouth. -->
+        <group
+            android:pivotX="67"
+            android:pivotY="74"
+            android:rotation="-32">
+            <path android:fillColor="#3D6FD8" android:pathData="M67,67.5H53A6.5,6.5 0,0 0,53 80.5H67Z" />
+            <path android:fillColor="#FFFFFF" android:pathData="M67,67.5H81A6.5,6.5 0,0 1,81 80.5H67Z" />
+            <path
+                android:strokeAlpha="0.45"
+                android:strokeColor="#FFFFFF"
+                android:strokeWidth="1.6"
+                android:strokeLineCap="round"
+                android:pathData="M51.5,71H59" />
+            <path
+                android:strokeColor="#D9DEE8"
+                android:strokeWidth="1.6"
+                android:strokeLineCap="round"
+                android:pathData="M75,77.4H82" />
+        </group>
+        <!--
+            One tiny arm, bent at the elbow, ending in a mitten hand on the capsule. A darker edge lets it show against
+            the body, and a patch of body colour hides that edge at the shoulder, so the arm grows out of the chest.
+        -->
+        <path
+            android:strokeColor="#C9502B"
+            android:strokeWidth="6.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M59.2,65.4C60.6,69.4 62.8,71.7 65.6,72L69.6,71.2" />
+        <path
+            android:fillColor="#C9502B"
+            android:pathData="M67.4,70.6a3.4,3.4 0,1 0,6.8 0a3.4,3.4 0,1 0,-6.8 0 M68.65,67.6a1.95,1.95 0,1 0,3.9 0a1.95,1.95 0,1 0,-3.9 0" />
+        <path android:fillColor="#F0683F" android:pathData="M55.9,65.4a3.3,3.3 0,1 0,6.6 0a3.3,3.3 0,1 0,-6.6 0" />
+        <path
+            android:strokeColor="#F0683F"
+            android:strokeWidth="5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M59.2,65.4C60.6,69.4 62.8,71.7 65.6,72L69.6,71.2" />
+        <path
+            android:fillColor="#F0683F"
+            android:pathData="M68.2,70.6a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0 M69.45,67.6a1.15,1.15 0,1 0,2.3 0a1.15,1.15 0,1 0,-2.3 0" />
+    </group>
+    <!-- The hospital cap, tipped forward over the far eye. -->
+    <group
+        android:rotation="9"
+        android:scaleX="0.86"
+        android:scaleY="0.86"
+        android:translateX="55.5"
+        android:translateY="33.2">
+        <path
+            android:fillColor="#FFFFFF"
+            android:strokeColor="#2A3550"
+            android:strokeWidth="1.4"
+            android:strokeLineJoin="round"
+            android:pathData="M-10.5,0L-8.6,-10Q-8.2,-12 -6.2,-12L6.2,-12Q8.2,-12 8.6,-10L10.5,0Z" />
+        <path
+            android:fillColor="#E3EAF2"
+            android:strokeColor="#2A3550"
+            android:strokeWidth="1.4"
+            android:strokeLineJoin="round"
+            android:pathData="M-12,-3H12Q13,-3 13,-2V0.6Q13,1.6 12,1.6H-12Q-13,1.6 -13,0.6V-2Q-13,-3 -12,-3Z" />
+        <path
+            android:fillColor="#3D7BD8"
+            android:pathData="M-1.25,-10.8H1.25V-8.75H3.3V-6.25H1.25V-4.2H-1.25V-6.25H-3.3V-8.75H-1.25Z" />
+    </group>
+</vector>

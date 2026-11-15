@@ -1,0 +1,6 @@
+# Git stores text with LF line endings. Windows scripts get CRLF back on checkout, so they still run there.
+* text=auto
+/gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary

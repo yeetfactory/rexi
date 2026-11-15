@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The themed icon is one colour, so shapes are told apart by holes: the eyes, the cross on the cap, and the part of
+    the capsule that crosses the body. Where the capsule pokes out past the chest it's solid again.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="100"
+        android:scaleX="0.9"
+        android:scaleY="0.9">
+        <path
+            android:fillColor="#FF000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="2"
+            android:strokeLineJoin="round"
+            android:pathData="M40,25L32,22L36,31Z M33,34L25,35L32,42Z M32,45L25,48L33,53Z" />
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M26,108C26,82 28,64 34,52C30,40 34,24 50,22C62,20 72,24 78,32C82,36 84,42 82,47C80,53 73,56.5 65.5,57.5C62.5,58 62,61 63.5,64.5C67.5,73 71,88 71,108Z M48.7,35a6.8,6.8 0,1 0,13.6 0a6.8,6.8 0,1 0,-13.6 0 M61.8,31a5.2,5.2 0,1 0,10.4 0a5.2,5.2 0,1 0,-10.4 0 M58.58,86.93L82.32,72.09A6.5,6.5 0,0 0,75.43 61.07L51.69,75.91A6.5,6.5 0,0 0,58.58 86.93Z" />
+    </group>
+    <group
+        android:rotation="9"
+        android:scaleX="0.86"
+        android:scaleY="0.86"
+        android:translateX="55.5"
+        android:translateY="33.2">
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M-12,-3L-9.93,-3L-8.6,-10Q-8.2,-12 -6.2,-12L6.2,-12Q8.2,-12 8.6,-10L9.93,-3L12,-3Q13,-3 13,-2L13,0.6Q13,1.6 12,1.6L-12,1.6Q-13,1.6 -13,0.6L-13,-2Q-13,-3 -12,-3Z M-1.25,-10.8H1.25V-8.75H3.3V-6.25H1.25V-4.2H-1.25V-6.25H-3.3V-8.75H-1.25Z" />
+    </group>
+</vector>
