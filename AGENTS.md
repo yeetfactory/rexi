@@ -69,7 +69,7 @@ Room exports each schema version to `app/schemas/`. Version 1 hasn't shipped, so
 - Logic in `core/` gets a JVM test. Database code gets a Robolectric test with an in-memory database. Robolectric tests use a plain `Application`, so Rexi's own startup work doesn't run under them.
 - Test names are sentences in backticks, such as `` `an answer always wins over the clock` ``.
 - On an emulator, load the sample data, then grant the reminder permissions with `adb shell pm grant top.yeetfactory.rexi android.permission.POST_NOTIFICATIONS` and `adb shell appops set top.yeetfactory.rexi SCHEDULE_EXACT_ALARM allow`.
-- The README screenshots in `docs/screenshots/` come from the sample data, never from someone's real medicines, because those are health records. Take them with the status bar in Android's demo mode, showing 9:41 and a full battery. Each screen is 720 px wide with rounded corners. The banner is 1600 px wide, with three phones on Rexi's mint (`#BFE9DE`). Retake them when a screen they show changes.
+- The README screenshots in `docs/screenshots/` come from the sample data, never from someone's real medicines, because those are health records. Take them with the status bar in Android's demo mode, showing 9:41 and a full battery. Each screen is 720 px wide with rounded corners. The banner is 1600 px wide, with three phones on Rexi's mint (`#BFE9DE`). Every screenshot has a dark version named with `-dark`, such as `today-dark.png`, and the dark banner sits on a deep mint (`#1A322C`). Take both from the same sample data, so they match. Retake them when a screen they show changes.
 
 ## Code style
 

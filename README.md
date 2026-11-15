@@ -4,7 +4,10 @@ A calm medication tracker for Android. Your day is a pillbox with four compartme
 
 Everything stays on your phone. There's no account, and the app can't reach the internet.
 
-![Rexi's Today screen with the afternoon dose due, the full screen reminder, and a week of history](docs/screenshots/hero.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-dark.png">
+  <img src="docs/screenshots/hero.png" alt="Rexi's Today screen with the afternoon dose due, the full screen reminder, and a week of history">
+</picture>
 
 ## What it does
 
@@ -35,12 +38,37 @@ Everything stays on your phone. There's no account, and the app can't reach the 
   <tr>
     <td width="33%"><img src="docs/screenshots/medicines.png" alt="Medicines: everything you take, what's left, and a warning that one is running low"></td>
     <td width="33%"><img src="docs/screenshots/add.png" alt="Adding a medicine: choosing what it is and its colours"></td>
-    <td width="33%"><img src="docs/screenshots/dark.png" alt="Today in dark mode"></td>
+    <td width="33%"><img src="docs/screenshots/detail.png" alt="One medicine: when it's taken, how many are left and when they run out, and two weeks of doses"></td>
   </tr>
   <tr>
     <td align="center">Medicines</td>
     <td align="center">Adding a medicine</td>
-    <td align="center">Dark mode</td>
+    <td align="center">One medicine</td>
+  </tr>
+</table>
+
+### Dark mode
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/today-dark.png" alt="Today in dark mode, with the afternoon dose due"></td>
+    <td width="33%"><img src="docs/screenshots/reminder-dark.png" alt="The full screen reminder in dark mode"></td>
+    <td width="33%"><img src="docs/screenshots/history-dark.png" alt="History in dark mode: a week as a pillbox grid"></td>
+  </tr>
+  <tr>
+    <td align="center">Today</td>
+    <td align="center">Reminder</td>
+    <td align="center">History</td>
+  </tr>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/medicines-dark.png" alt="Medicines in dark mode, with a warning that one is running low"></td>
+    <td width="33%"><img src="docs/screenshots/add-dark.png" alt="Adding a medicine in dark mode: choosing what it is and its colours"></td>
+    <td width="33%"><img src="docs/screenshots/detail-dark.png" alt="One medicine in dark mode: when it's taken, how many are left, and two weeks of doses"></td>
+  </tr>
+  <tr>
+    <td align="center">Medicines</td>
+    <td align="center">Adding a medicine</td>
+    <td align="center">One medicine</td>
   </tr>
 </table>
 
