@@ -1,14 +1,51 @@
 package top.yeetfactory.rexi.core
 
-/** The four compartments of a day. Every scheduled dose belongs to one of them, at that compartment's time. */
+/** Preset slots follow the person's settings; custom slots carry their own local time. */
+sealed interface DoseSlot {
+    val key: String
+
+    fun label(use24: Boolean): String =
+        when (this) {
+            is DayPart -> label
+            is CustomTime -> Format.time(minutes, use24)
+        }
+
+    companion object {
+        fun fromKey(key: String): DoseSlot? {
+            if (!key.startsWith(CustomTime.PREFIX)) return DayPart.entries.firstOrNull { it.name == key }
+            val minutes = key.removePrefix(CustomTime.PREFIX).toIntOrNull() ?: return null
+            return if (minutes in 0 until CustomTime.MINUTES_PER_DAY) CustomTime(minutes) else null
+        }
+    }
+}
+
+data class CustomTime(
+    val minutes: Int,
+) : DoseSlot {
+    init {
+        require(minutes in 0 until MINUTES_PER_DAY)
+    }
+
+    override val key: String get() = "$PREFIX$minutes"
+
+    companion object {
+        internal const val PREFIX = "time-"
+        internal const val MINUTES_PER_DAY = 24 * 60
+    }
+}
+
+/** The four shared compartments of a day. */
 enum class DayPart(
     val label: String,
     val defaultMinutes: Int,
-) {
+) : DoseSlot {
     MORNING("Morning", 8 * 60),
     AFTERNOON("Afternoon", 14 * 60),
     EVENING("Evening", 19 * 60 + 30),
     NIGHT("Night", 22 * 60),
+    ;
+
+    override val key: String get() = name
 }
 
 /** How a medicine looks, from a fixed set of drawings. OTHER covers everything else, with a name the person types. */
@@ -110,6 +147,7 @@ enum class Food(
 ) {
     WITH_FOOD("With food"),
     BEFORE_FOOD("Before food"),
+    AFTER_FOOD("After food"),
     ANY("Any time"),
 }
 

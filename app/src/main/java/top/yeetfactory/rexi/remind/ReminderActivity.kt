@@ -7,14 +7,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
 import top.yeetfactory.rexi.RexiApp
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.ui.ReminderScreen
 import top.yeetfactory.rexi.ui.RexiTheme
 import java.time.LocalDate
 
 /** Opens over the lock screen when a dose is due, the way an alarm clock does. */
 class ReminderActivity : ComponentActivity() {
-    private val target = mutableStateOf<Pair<LocalDate, DayPart>?>(null)
+    private val target = mutableStateOf<Pair<LocalDate, DoseSlot>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setShowWhenLocked(true)

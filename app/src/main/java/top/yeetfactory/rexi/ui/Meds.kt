@@ -34,6 +34,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import top.yeetfactory.rexi.RexiApp
+import top.yeetfactory.rexi.core.CustomTime
+import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.core.Frequency
 import top.yeetfactory.rexi.core.Schedule
@@ -180,7 +182,14 @@ private fun MedRow(
                     }
 
                     else -> {
-                        med.slots.sortedBy { it.part.ordinal }.forEach { PartTag(it.part) }
+                        val parts = med.amounts.keys
+                        val custom = parts.filterIsInstance<CustomTime>()
+                        parts.filterIsInstance<DayPart>().sortedBy { it.ordinal }.forEach { PartTag(it) }
+                        if (custom.isNotEmpty()) {
+                            val use24 = rememberUse24h()
+                            custom.sortedBy { it.minutes }.take(3).forEach { SoftTag(it.label(use24)) }
+                            if (custom.size > 3) SoftTag("+${custom.size - 3} more")
+                        }
                         if (medicine.frequency != Frequency.EVERY_DAY) SoftTag(shortSchedule(med, today))
                     }
                 }

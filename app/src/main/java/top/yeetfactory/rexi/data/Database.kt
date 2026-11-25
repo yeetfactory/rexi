@@ -9,9 +9,13 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.TypeConverter
+import androidx.room.TypeConverters
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 
 @Dao
 interface RexiDao {
@@ -77,7 +81,7 @@ interface RexiDao {
     suspend fun log(
         id: Long,
         day: Long,
-        part: DayPart,
+        part: DoseSlot,
     ): DoseLog?
 
     @Query("SELECT * FROM dose_log WHERE id = :id")
@@ -120,11 +124,28 @@ interface RexiDao {
     suspend fun insertLogs(logs: List<DoseLog>)
 }
 
-@Database(entities = [Medicine::class, Slot::class, DoseLog::class], version = 1, exportSchema = true)
+class SlotConverters {
+    @TypeConverter
+    fun encode(slot: DoseSlot?): String? = slot?.key
+
+    @TypeConverter
+    fun decode(key: String?): DoseSlot? = key?.let { requireNotNull(DoseSlot.fromKey(it)) }
+}
+
+@TypeConverters(SlotConverters::class)
+@Database(entities = [Medicine::class, Slot::class, DoseLog::class], version = 2, exportSchema = true)
 abstract class RexiDatabase : RoomDatabase() {
     abstract fun dao(): RexiDao
 
     companion object {
-        fun create(context: Context): RexiDatabase = Room.databaseBuilder(context, RexiDatabase::class.java, "rexi.db").build()
+        private val migration1To2 =
+            object : Migration(1, 2) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE dose_log ADD COLUMN historical INTEGER NOT NULL DEFAULT 0")
+                }
+            }
+
+        fun create(context: Context): RexiDatabase =
+            Room.databaseBuilder(context, RexiDatabase::class.java, "rexi.db").addMigrations(migration1To2).build()
     }
 }

@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.widget.Widgets
 import java.time.LocalDate
@@ -86,7 +86,7 @@ class RexiReceiver : BroadcastReceiver() {
     private suspend fun remind(
         app: RexiApp,
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) {
         val book = app.doses.book(day)
         val compartment = book.view.part(part) ?: return

@@ -1,8 +1,10 @@
 package top.yeetfactory.rexi.data
 
 import androidx.room.withTransaction
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseStatus
+import top.yeetfactory.rexi.core.Frequency
+import top.yeetfactory.rexi.core.PastDose
 import top.yeetfactory.rexi.core.SupplyMode
 import java.time.Instant
 import java.time.LocalDate
@@ -24,26 +26,55 @@ class Repository(
 
     fun now(): Long = clock()
 
-    fun today(): LocalDate = LocalDate.now(zone())
+    fun today(): LocalDate = dayOf(now())
 
     fun dayOf(epochMillis: Long): LocalDate = Instant.ofEpochMilli(epochMillis).atZone(zone()).toLocalDate()
 
     suspend fun save(
         medicine: Medicine,
-        amounts: Map<DayPart, Double>,
+        amounts: Map<out DoseSlot, Double>,
+        pastDoses: List<PastDose> = emptyList(),
+        pastDosesThrough: Long? = null,
     ): Long {
+        val now = now()
+        val zone = zone()
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val slots = amounts.filterValues { it.isFinite() && it > 0.0 }
+        val answered = mutableSetOf<Pair<LocalDate, DoseSlot>>()
+        require(medicine.id == 0L || pastDoses.isEmpty())
+        require(pastDosesThrough == null || (pastDosesThrough <= now && pastDoses.isNotEmpty()))
+        // A confirmed range accounts for every scheduled dose through its cutoff. The usual one-hour grace
+        // would also count earlier doses on the first day, even though the person hadn't started yet.
+        val scheduleFrom = pastDosesThrough?.plus(MedicineWithSlots.SCHEDULE_GRACE_MS) ?: now
         val id =
             db.withTransaction {
                 val id =
                     if (medicine.id == 0L) {
-                        dao.insert(medicine.copy(createdAt = clock(), scheduleFrom = clock()))
+                        dao.insert(medicine.copy(createdAt = now, scheduleFrom = scheduleFrom))
                     } else {
                         val before = dao.medicine(medicine.id)
-                        val rescheduled = before == null || scheduleChanged(before, medicine, amounts)
-                        dao.update(if (rescheduled) medicine.copy(scheduleFrom = clock()) else medicine)
+                        val rescheduled = before == null || scheduleChanged(before, medicine, slots.keys)
+                        dao.update(if (rescheduled) medicine.copy(scheduleFrom = now) else medicine)
                         medicine.id
                     }
-                dao.replaceSlots(id, amounts.filterValues { it > 0.0 }.map { (part, amount) -> Slot(id, part, amount) })
+                dao.replaceSlots(id, slots.map { (part, amount) -> Slot(id, part, amount) })
+                dao.insertLogs(
+                    pastDoses.map { dose ->
+                        val day = Instant.ofEpochMilli(dose.at).atZone(zone).toLocalDate()
+                        require(day >= today.minusDays(PastDose.DAYS_BACK) && dose.at <= (pastDosesThrough ?: now))
+                        require(dose.amount.isFinite() && dose.amount > 0.0)
+                        require(dose.part == null || (dose.part in slots.keys && answered.add(day to dose.part)))
+                        DoseLog(
+                            medicineId = id,
+                            day = day.toEpochDay(),
+                            part = dose.part,
+                            status = DoseStatus.TAKEN,
+                            at = dose.at,
+                            amount = dose.amount,
+                            historical = true,
+                        )
+                    },
+                )
                 id
             }
         onChange()
@@ -54,21 +85,21 @@ class Repository(
     private fun scheduleChanged(
         before: MedicineWithSlots,
         after: Medicine,
-        amounts: Map<DayPart, Double>,
+        slots: Set<DoseSlot>,
     ): Boolean {
         val old = before.medicine
         return old.frequency != after.frequency ||
-            old.daysMask != after.daysMask ||
-            old.everyDays != after.everyDays ||
-            old.courseDays != after.courseDays ||
+            (after.frequency == Frequency.SOME_DAYS && old.daysMask != after.daysMask) ||
+            (after.frequency == Frequency.EVERY_FEW_DAYS && old.everyDays != after.everyDays) ||
+            (after.frequency == Frequency.COURSE && old.courseDays != after.courseDays) ||
             old.startDay != after.startDay ||
-            before.amounts.keys != amounts.filterValues { it > 0.0 }.keys
+            before.amounts.keys != slots
     }
 
     suspend fun take(
         medId: Long,
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         at: Long,
         amount: Double,
     ) {
@@ -83,9 +114,10 @@ class Repository(
                     status = DoseStatus.TAKEN,
                     at = at,
                     amount = amount,
+                    historical = previous?.historical == true,
                 ),
             )
-            if (previous?.status != DoseStatus.TAKEN) adjustCount(medId, -amount)
+            if (previous?.status != DoseStatus.TAKEN && previous?.historical != true) adjustCount(medId, -amount)
         }
         onChange()
     }
@@ -93,7 +125,7 @@ class Repository(
     suspend fun skip(
         medId: Long,
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         amount: Double,
         reason: String = "",
     ) {
@@ -109,9 +141,10 @@ class Repository(
                     at = clock(),
                     amount = amount,
                     reason = reason,
+                    historical = previous?.historical == true,
                 ),
             )
-            if (previous?.status == DoseStatus.TAKEN) adjustCount(medId, previous.amount)
+            if (previous?.status == DoseStatus.TAKEN && !previous.historical) adjustCount(medId, previous.amount)
         }
         onChange()
     }
@@ -123,7 +156,7 @@ class Repository(
     suspend fun markMissed(
         medId: Long,
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         amount: Double,
         quietly: Boolean = false,
     ): Boolean {
@@ -149,12 +182,12 @@ class Repository(
     suspend fun undo(
         medId: Long,
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) {
         db.withTransaction {
             val previous = dao.log(medId, day.toEpochDay(), part) ?: return@withTransaction
             dao.deleteLog(previous.id)
-            if (previous.status == DoseStatus.TAKEN) adjustCount(medId, previous.amount)
+            if (previous.status == DoseStatus.TAKEN && !previous.historical) adjustCount(medId, previous.amount)
         }
         onChange()
     }
@@ -190,7 +223,7 @@ class Repository(
         db.withTransaction {
             val log = dao.logById(logId) ?: return@withTransaction
             dao.deleteLog(log.id)
-            adjustCount(log.medicineId, log.amount)
+            if (!log.historical) adjustCount(log.medicineId, log.amount)
         }
         onChange()
     }

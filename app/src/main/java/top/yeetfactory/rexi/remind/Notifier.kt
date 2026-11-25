@@ -15,7 +15,9 @@ import androidx.core.net.toUri
 import top.yeetfactory.rexi.MainActivity
 import top.yeetfactory.rexi.R
 import top.yeetfactory.rexi.RexiApp
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.core.SupplyInfo
 import top.yeetfactory.rexi.core.SupplyMode
@@ -76,7 +78,7 @@ class Notifier(
     /** The reminder for one compartment. One medicine gets Take, Snooze and Skip; several get Take all and Choose. */
     fun showDose(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         doses: List<Pair<MedicineWithSlots, Double>>,
         dueAt: Long,
         quiet: Boolean,
@@ -85,7 +87,7 @@ class Notifier(
         val settings = app.settings.value
         val single = doses.singleOrNull()
         val swallowed = doses.all { it.first.medicine.unit.swallowed }
-        val title = if (single != null || hideNames) "${part.label} dose" else "${part.label}, ${doses.size} medicines"
+        val title = if (single != null || hideNames) "${part.label(use24)} dose" else "${part.label(use24)}, ${doses.size} medicines"
         val text =
             when {
                 hideNames && single != null -> "Time for your dose"
@@ -108,7 +110,7 @@ class Notifier(
                 .setDeleteIntent(null)
                 .setAutoCancel(true)
                 .setVisibility(if (hideNames) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PUBLIC)
-                .setPublicVersion(publicVersion("${part.label} dose", "Time for your dose", quiet))
+                .setPublicVersion(publicVersion("${part.label(use24)} dose", "Time for your dose", quiet))
         if (!hideNames) {
             val first = doses.first().first.medicine
             builder.setLargeIcon(Icon.createWithBitmap(MedArt.bitmap(first.kind, first.color1, first.color2, ICON_PX)))
@@ -146,12 +148,12 @@ class Notifier(
 
     fun cancelDose(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) = manager.cancel(doseId(day, part))
 
     fun showMissed(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         medicines: List<MedicineWithSlots>,
     ) {
         if (medicines.isEmpty() || !canNotify()) return
@@ -166,15 +168,15 @@ class Notifier(
                 .Builder(app, CHANNEL_MISSED)
                 .setSmallIcon(R.drawable.ic_stat_rexi)
                 .setColor(INK)
-                .setContentTitle("${part.label} dose marked as missed")
+                .setContentTitle("${part.label(use24)} dose marked as missed")
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))
                 .setCategory(Notification.CATEGORY_REMINDER)
-                .setContentIntent(open("late:${day.toEpochDay()}:${part.name}", key))
+                .setContentIntent(open("late:${day.toEpochDay()}:${part.key}", key))
                 .setAutoCancel(true)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
-                .setPublicVersion(publicVersion("${part.label} dose marked as missed", "Took it after all?", quiet = false))
-                .addAction(action("I took it", open("late:${day.toEpochDay()}:${part.name}", key + CHOOSE_OFFSET)))
+                .setPublicVersion(publicVersion("${part.label(use24)} dose marked as missed", "Took it after all?", quiet = false))
+                .addAction(action("I took it", open("late:${day.toEpochDay()}:${part.key}", key + CHOOSE_OFFSET)))
                 .addAction(action("OK", broadcast(RexiReceiver.ACTION_DISMISS_MISSED, key) { putDayPart(day, part) }))
                 .build()
         manager.notify(key, notification)
@@ -182,7 +184,7 @@ class Notifier(
 
     fun cancelMissed(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) = manager.cancel(missedId(day, part))
 
     fun showRefill(
@@ -276,7 +278,8 @@ class Notifier(
     private fun action(
         label: String,
         intent: PendingIntent,
-    ): Notification.Action = Notification.Action.Builder(Icon.createWithResource(app, R.drawable.ic_stat_rexi), label, intent).build()
+    ): Notification.Action =
+        Notification.Action.Builder(Icon.createWithResource(app, R.drawable.ic_notification_action), label, intent).build()
 
     private fun open(
         route: String,
@@ -298,7 +301,7 @@ class Notifier(
     ): PendingIntent =
         PendingIntent.getBroadcast(
             app,
-            "$action:$key".hashCode(),
+            key,
             Intent(app, RexiReceiver::class.java).setAction(action).apply(extras),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -314,17 +317,25 @@ class Notifier(
         private const val REFILL_BASE = 100_000
         private const val AS_NEEDED_BASE = 200_000
         private const val MISSED_BASE = 50_000
+        private const val CUSTOM_BASE = 10_000_000
+        private const val CUSTOM_MISSED_OFFSET = 15_000_000
         private const val CHOOSE_OFFSET = 7_000_000
 
         fun doseId(
             day: LocalDate,
-            part: DayPart,
-        ): Int = 1_000 + (day.toEpochDay() % 10_000).toInt() * 4 + part.ordinal
+            part: DoseSlot,
+        ): Int {
+            val dayIndex = Math.floorMod(day.toEpochDay(), 10_000L).toInt()
+            return when (part) {
+                is DayPart -> 1_000 + dayIndex * 4 + part.ordinal
+                is CustomTime -> CUSTOM_BASE + dayIndex * CustomTime.MINUTES_PER_DAY + part.minutes
+            }
+        }
 
         fun missedId(
             day: LocalDate,
-            part: DayPart,
-        ): Int = MISSED_BASE + doseId(day, part)
+            part: DoseSlot,
+        ): Int = doseId(day, part) + if (part is CustomTime) CUSTOM_MISSED_OFFSET else MISSED_BASE
 
         /** The zone the reminders were last worked out in. */
         fun zone(): ZoneId = ZoneId.systemDefault()

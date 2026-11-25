@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 class ScheduleTest {
     private val start = LocalDate.of(2026, 11, 9) // A Monday.
@@ -65,6 +66,13 @@ class ScheduleTest {
         assertFalse(Schedule.snoozeHolds(snoozedUntil = 950, dueAt = 900, now = now))
     }
 
+    @Test fun `custom slots ring once and honor snoozes when repeating is off`() {
+        assertEquals(100L, Schedule.customRingAt(dueAt = 100, rangAt = 0, snoozedUntil = 0, repeatAfter = null))
+        assertEquals(300L, Schedule.customRingAt(dueAt = 100, rangAt = 100, snoozedUntil = 300, repeatAfter = null))
+        assertNull(Schedule.customRingAt(dueAt = 100, rangAt = 300, snoozedUntil = 300, repeatAfter = null))
+        assertEquals(360L, Schedule.customRingAt(dueAt = 100, rangAt = 300, snoozedUntil = 300, repeatAfter = 60))
+    }
+
     @Test fun `a course stops after its last day and knows which day it's on`() {
         val plan = plan(Frequency.COURSE, courseDays = 3)
         assertEquals(2, Schedule.courseDay(plan, start.plusDays(1)))
@@ -89,5 +97,76 @@ class ScheduleTest {
     @Test fun `each scheduled part becomes one dose`() {
         val doses = Schedule.dosesOn(listOf(plan(Frequency.EVERY_DAY)), start)
         assertEquals(setOf(DayPart.MORNING, DayPart.EVENING), doses.map { it.part }.toSet())
+    }
+
+    @Test fun `past doses start at the chosen time and use each slot amount`() {
+        val early = CustomTime(6 * 60 + 30)
+        val late = CustomTime(18 * 60 + 30)
+        val plan = plan(Frequency.EVERY_DAY).copy(slots = mapOf(early to 1.0, late to 2.0))
+        val through =
+            start
+                .plusDays(1)
+                .atTime(12, 0)
+                .toInstant(ZoneOffset.UTC)
+                .toEpochMilli()
+        val clock = DayClock(emptyMap(), 180)
+        val doses = Schedule.pastDoses(plan, late, through, clock, ZoneOffset.UTC)
+
+        val expected =
+            listOf(
+                PastDose(start.atTime(18, 30).toInstant(ZoneOffset.UTC).toEpochMilli(), 2.0, late),
+                PastDose(
+                    start
+                        .plusDays(1)
+                        .atTime(6, 30)
+                        .toInstant(ZoneOffset.UTC)
+                        .toEpochMilli(),
+                    1.0,
+                    early,
+                ),
+            )
+        assertEquals(expected, doses)
+    }
+
+    @Test fun `past doses respect weekdays and the rhythm from the selected start date`() {
+        val clock = DayClock(emptyMap(), 180)
+        val through =
+            start
+                .plusDays(6)
+                .atTime(23, 0)
+                .toInstant(ZoneOffset.UTC)
+                .toEpochMilli()
+        val selected = start.plusDays(2)
+        val weekdays = plan(Frequency.SOME_DAYS, daysMask = 0b001_0101).copy(startDay = selected)
+        val intervals = plan(Frequency.EVERY_FEW_DAYS, everyDays = 3).copy(startDay = selected)
+        val morning = DayPart.MORNING
+
+        fun days(plan: Plan): Set<LocalDate> =
+            Schedule
+                .pastDoses(plan, morning, through, clock, ZoneOffset.UTC)
+                .map {
+                    java.time.Instant
+                        .ofEpochMilli(it.at)
+                        .atOffset(ZoneOffset.UTC)
+                        .toLocalDate()
+                }.toSet()
+
+        assertEquals(setOf(selected, selected.plusDays(2)), days(weekdays))
+        assertEquals(setOf(selected, selected.plusDays(3)), days(intervals))
+        assertTrue(days(weekdays.copy(startDay = selected.plusDays(1))).isEmpty())
+    }
+
+    @Test fun `past doses end with the course even if the confirmation comes later`() {
+        val clock = DayClock(emptyMap(), 180)
+        val through =
+            start
+                .plusDays(4)
+                .atTime(23, 0)
+                .toInstant(ZoneOffset.UTC)
+                .toEpochMilli()
+        val plan = plan(Frequency.COURSE, courseDays = 2)
+        val doses = Schedule.pastDoses(plan, DayPart.EVENING, through, clock, ZoneOffset.UTC)
+        assertEquals(listOf(DayPart.EVENING, DayPart.MORNING, DayPart.EVENING), doses.map { it.part })
+        assertTrue(Schedule.pastDoses(plan(Frequency.AS_NEEDED), DayPart.MORNING, through, clock, ZoneOffset.UTC).isEmpty())
     }
 }

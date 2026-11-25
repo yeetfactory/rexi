@@ -3,7 +3,7 @@ package top.yeetfactory.rexi.data
 import androidx.room.withTransaction
 import org.json.JSONArray
 import org.json.JSONObject
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.DoseUnit
 import top.yeetfactory.rexi.core.Food
@@ -131,33 +131,38 @@ class Backup(
     private fun slotJson(s: Slot) =
         JSONObject()
             .put("medicineId", s.medicineId)
-            .put("part", s.part.name)
+            .put("part", s.part.key)
             .put("amount", s.amount)
 
-    private fun slotFrom(o: JSONObject) = Slot(o.getLong("medicineId"), enumOf(o.getString("part"), DayPart.MORNING), o.getDouble("amount"))
+    private fun slotFrom(o: JSONObject) = Slot(o.getLong("medicineId"), slotKey(o), o.getDouble("amount"))
 
     private fun logJson(l: DoseLog) =
         JSONObject()
             .put("id", l.id)
             .put("medicineId", l.medicineId)
             .put("day", l.day)
-            .put("part", l.part?.name ?: JSONObject.NULL)
+            .put("part", l.part?.key ?: JSONObject.NULL)
             .put("status", l.status.name)
             .put("at", l.at)
             .put("amount", l.amount)
             .put("reason", l.reason)
+            .put("historical", l.historical)
 
     private fun logFrom(o: JSONObject) =
         DoseLog(
             id = o.getLong("id"),
             medicineId = o.getLong("medicineId"),
             day = o.getLong("day"),
-            part = if (o.isNull("part")) null else enumOf(o.getString("part"), DayPart.MORNING),
+            part = if (o.isNull("part")) null else slotKey(o),
             status = enumOf(o.getString("status"), DoseStatus.TAKEN),
             at = o.getLong("at"),
             amount = o.optDouble("amount", 1.0),
             reason = o.optString("reason"),
+            historical = o.optBoolean("historical"),
         )
+
+    private fun slotKey(o: JSONObject): DoseSlot =
+        requireNotNull(DoseSlot.fromKey(o.getString("part"))) { "This backup has an invalid dose time." }
 
     private inline fun <reified T : Enum<T>> enumOf(
         name: String,
@@ -166,6 +171,6 @@ class Backup(
 
     companion object {
         private const val FORMAT = "rexi-backup"
-        private const val VERSION = 1
+        private const val VERSION = 2
     }
 }

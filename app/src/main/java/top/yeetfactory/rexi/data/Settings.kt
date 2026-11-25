@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import top.yeetfactory.rexi.core.DayClock
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import java.time.LocalDate
 
 enum class ThemeMode(
@@ -44,7 +45,7 @@ data class AppSettings(
 ) {
     val clock: DayClock get() = DayClock(partMinutes, missedAfterHours * 60)
 
-    fun minutes(part: DayPart): Int = partMinutes[part] ?: part.defaultMinutes
+    fun minutes(part: DoseSlot): Int = clock.minutes(part)
 
     /** Quiet hours can wrap past midnight, such as 23:00 to 07:00. */
     fun isQuiet(minuteOfDay: Int): Boolean {
@@ -94,7 +95,7 @@ class SettingsStore(
         state.update(change)
         val value = state.value
         prefs.edit {
-            value.partMinutes.forEach { (part, minutes) -> putInt("part:${part.name}", minutes) }
+            value.partMinutes.forEach { (part, minutes) -> putInt("part:${part.key}", minutes) }
             putInt("snoozeMinutes", value.snoozeMinutes)
             putBoolean("repeat", value.repeatUntilAnswered)
             putBoolean("overLockScreen", value.overLockScreen)
@@ -115,31 +116,31 @@ class SettingsStore(
     /** When a snoozed compartment should ring again, or 0 if it isn't snoozed. */
     fun snoozedUntil(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ): Long = prefs.getLong(snoozeKey(day, part), 0)
 
     fun snooze(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         until: Long,
     ) = prefs.edit { putLong(snoozeKey(day, part), until) }
 
     fun clearSnooze(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) = prefs.edit { remove(snoozeKey(day, part)) }
 
     /** When a compartment last rang, so a repeat comes ten minutes after it rather than straight away. */
     fun rangAt(
         day: LocalDate,
-        part: DayPart,
-    ): Long = prefs.getLong("rang:${day.toEpochDay()}:${part.name}", 0)
+        part: DoseSlot,
+    ): Long = prefs.getLong("rang:${day.toEpochDay()}:${part.key}", 0)
 
     fun setRang(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         at: Long,
-    ) = prefs.edit { putLong("rang:${day.toEpochDay()}:${part.name}", at) }
+    ) = prefs.edit { putLong("rang:${day.toEpochDay()}:${part.key}", at) }
 
     /** Old snoozes and rings are only clutter. Anything before [day] is dropped. */
     fun forgetSnoozesBefore(day: LocalDate) {
@@ -201,8 +202,8 @@ class SettingsStore(
 
     private fun snoozeKey(
         day: LocalDate,
-        part: DayPart,
-    ) = "snooze:${day.toEpochDay()}:${part.name}"
+        part: DoseSlot,
+    ) = "snooze:${day.toEpochDay()}:${part.key}"
 
     companion object {
         private val BACKED_UP =

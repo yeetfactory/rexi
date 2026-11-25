@@ -55,6 +55,7 @@ import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DayView
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.DoseView
 import top.yeetfactory.rexi.core.Food
@@ -78,7 +79,7 @@ internal data class Snack(
 internal fun TodayScreen(
     app: RexiApp,
     onLogDose: (Long) -> Unit,
-    onLate: (LocalDate, DayPart) -> Unit,
+    onLate: (LocalDate, DoseSlot) -> Unit,
     onAdd: () -> Unit,
     onOpen: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -96,7 +97,7 @@ internal fun TodayScreen(
     val settings by app.settings.settings.collectAsStateWithLifecycle()
     var snoozeTick by remember { mutableIntStateOf(0) }
     var snack by remember { mutableStateOf<Snack?>(null) }
-    var expanded by remember { mutableStateOf(setOf<DayPart>()) }
+    var expanded by remember { mutableStateOf(setOf<DoseSlot>()) }
     var health by remember { mutableStateOf(ReminderHealth.read(app)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { health = ReminderHealth.read(app) }
     LaunchedEffect(snack) {
@@ -124,7 +125,7 @@ internal fun TodayScreen(
         scope.launch {
             val taken = app.doses.take(date, part.part, only = part.pending.map { it.medId }.toSet())
             if (taken.isNotEmpty()) {
-                val words = if (taken.size == 1) taken.first().medicine.title else "${part.part.label} doses"
+                val words = if (taken.size == 1) taken.first().medicine.title else "${part.part.label(use24)} doses"
                 val verb = if (taken.all { it.medicine.unit.swallowed }) "taken" else "done"
                 snack =
                     Snack("$words $verb at ${Format.time(Format.minutesOfDay(app.repository.now(), zone), use24)}") {
@@ -135,7 +136,7 @@ internal fun TodayScreen(
     }
 
     fun toggleOne(
-        part: DayPart,
+        part: DoseSlot,
         dose: DoseView,
     ) {
         scope.launch {
@@ -260,15 +261,15 @@ private fun Tray(
     medicines: Map<Long, MedicineWithSlots>,
     date: LocalDate,
     use24: Boolean,
-    snoozedUntil: (DayPart) -> Long?,
+    snoozedUntil: (DoseSlot) -> Long?,
     onTake: (PartView) -> Unit,
-    onToggle: (DayPart, DoseView) -> Unit,
+    onToggle: (DoseSlot, DoseView) -> Unit,
     onSnooze: (PartView) -> Unit,
     onSkip: (PartView) -> Unit,
     onLate: (PartView) -> Unit,
     onOpen: (Long) -> Unit,
-    expanded: Set<DayPart>,
-    onExpand: (DayPart) -> Unit,
+    expanded: Set<DoseSlot>,
+    onExpand: (DoseSlot) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
@@ -349,7 +350,7 @@ private fun ClosedCompartment(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(part.part.label, style = Type.name, color = tint.label, modifier = Modifier.semantics { heading() })
+            Text(part.part.label(use24), style = Type.name, color = tint.label, modifier = Modifier.semantics { heading() })
             Spacer(Modifier.height(3.dp))
             Text(
                 part.doses.mapNotNull { medicines[it.medId]?.medicine?.title }.joinToString(", "),
@@ -385,7 +386,7 @@ private fun ClosedCompartment(
                     ) { Text("Next", style = Type.label, color = tint.label) }
                     Spacer(Modifier.width(10.dp))
                 }
-                Text(Format.time(part.minutes, use24), style = Type.time, color = tint.ink)
+                if (part.part is DayPart) Text(Format.time(part.minutes, use24), style = Type.time, color = tint.ink)
             }
         }
     }
@@ -402,6 +403,7 @@ private fun ReviewCompartment(
     onOpen: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val use24 = rememberUse24h()
     val tint = LocalPalette.current.compartment(part.part, later = part.state == PartState.LATER)
     Column(
         modifier
@@ -411,7 +413,7 @@ private fun ReviewCompartment(
             .padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(part.part.label, style = Type.name, color = tint.label, modifier = Modifier.weight(1f).semantics { heading() })
+            Text(part.part.label(use24), style = Type.name, color = tint.label, modifier = Modifier.weight(1f).semantics { heading() })
             TextAction("Close", onClose, color = tint.ink)
         }
         part.doses.forEach { dose ->
@@ -487,7 +489,7 @@ private fun OpenCompartment(
             .padding(18.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(part.part.label, style = Type.name, color = tint.label, modifier = Modifier.weight(1f).semantics { heading() })
+            Text(part.part.label(use24), style = Type.name, color = tint.label, modifier = Modifier.weight(1f).semantics { heading() })
             val chip = if (snoozedUntil != null) "Snoozed until ${Format.time(snoozedUntil, ZoneId.systemDefault(), use24)}" else "Due now"
             Box(
                 Modifier
@@ -507,7 +509,7 @@ private fun OpenCompartment(
                 med = med,
                 dose = dose,
                 date = date,
-                time = if (single) Format.time(part.minutes, use24) else null,
+                time = if (single && part.part is DayPart) Format.time(part.minutes, use24) else null,
                 textColor = tint.text,
                 inkColor = tint.ink,
                 onInk = tint.background,

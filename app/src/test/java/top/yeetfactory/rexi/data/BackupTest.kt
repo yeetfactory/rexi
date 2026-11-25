@@ -10,10 +10,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseUnit
+import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.MedColor
 import top.yeetfactory.rexi.core.MedKind
+import top.yeetfactory.rexi.core.PastDose
 import java.time.LocalDate
 import java.time.ZoneOffset
 
@@ -71,5 +74,52 @@ class BackupTest {
             val error = runCatching { Backup(target, settings).restore("""{"hello": 1}""") }.exceptionOrNull()
             assertEquals("This file isn't a Rexi backup.", error?.message)
             assertEquals(0, target.dao().allMedicines().size)
+        }
+
+    @Test fun `custom times and after food survive a backup with past doses`() =
+        runTest {
+            val now = day.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli()
+            val at = now - 3_600_000
+            val late = CustomTime(22 * 60 + 55)
+            val repository = Repository(source, clock = { now }, zone = { ZoneOffset.UTC })
+            val id =
+                repository.save(
+                    Medicine(name = "Example", startDay = day.toEpochDay(), food = Food.AFTER_FOOD),
+                    mapOf(late to 1.0),
+                    listOf(PastDose(at, 1.0, late)),
+                )
+            Backup(target, settings).restore(Backup(source, settings).export(now))
+            assertEquals(source.dao().medicine(id), target.dao().medicine(id))
+            assertEquals(source.dao().allLogs(), target.dao().allLogs())
+        }
+
+    @Test fun `version one backups still read named slots`() =
+        runTest {
+            val text =
+                """
+                {
+                  "format": "rexi-backup", "version": 1,
+                  "medicines": [{"id": 9, "name": "Example", "startDay": 100}],
+                  "slots": [{"medicineId": 9, "part": "MORNING", "amount": 1}],
+                  "logs": [{"id": 1, "medicineId": 9, "day": 100, "part": "MORNING", "status": "TAKEN", "at": 8640000000}]
+                }
+                """.trimIndent()
+            assertEquals(1, Backup(target, settings).restore(text))
+            assertEquals(
+                DayPart.MORNING,
+                target
+                    .dao()
+                    .allSlots()
+                    .single()
+                    .part,
+            )
+            assertEquals(
+                false,
+                target
+                    .dao()
+                    .allLogs()
+                    .single()
+                    .historical,
+            )
         }
 }

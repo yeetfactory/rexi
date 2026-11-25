@@ -37,7 +37,9 @@ import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.CellState
 import top.yeetfactory.rexi.core.DayBook
+import top.yeetfactory.rexi.core.DayClock
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.Format
@@ -235,6 +237,9 @@ private fun WhenSection(
                 val rules =
                     listOfNotNull(
                         "${m.amount(m.asNeededAmount)} each time",
+                        m.food.label
+                            .lowercase()
+                            .takeIf { m.food != Food.ANY },
                         if (m.minGapHours > 0) "at least ${m.minGapHours} hours apart" else null,
                         if (m.maxPerDay > 0) "up to ${m.maxPerDay} a day" else null,
                     )
@@ -242,8 +247,9 @@ private fun WhenSection(
             }
             return
         }
+        val clock = DayClock(partMinutes, 0)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            med.slots.sortedBy { partMinutes[it.part] ?: it.part.defaultMinutes }.forEach { slot ->
+            med.slots.sortedBy { clock.minutes(it.part) }.forEach { slot ->
                 val tint = palette.tint(slot.part)
                 Row(
                     Modifier
@@ -256,11 +262,16 @@ private fun WhenSection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(slot.part.label, style = Type.body.copy(fontWeight = Type.name.fontWeight), color = tint.label)
+                        val preset = slot.part as? DayPart
+                        if (preset !=
+                            null
+                        ) {
+                            Text(preset.label, style = Type.body.copy(fontWeight = Type.name.fontWeight), color = tint.label)
+                        }
                         val food = if (m.food != Food.ANY) ", ${m.food.label.lowercase()}" else ""
                         Text(m.amount(slot.amount) + food, style = Type.small, color = tint.text)
                     }
-                    Text(Format.time(partMinutes[slot.part] ?: slot.part.defaultMinutes, use24), style = Type.time, color = tint.ink)
+                    Text(Format.time(clock.minutes(slot.part), use24), style = Type.time, color = tint.ink)
                 }
             }
         }
@@ -402,6 +413,7 @@ private fun RecentSection(
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
+    val use24 = rememberUse24h()
     val now = LocalDateTime.now(ZoneId.systemDefault())
     Panel(modifier) {
         if (med.asNeeded) {
@@ -423,7 +435,7 @@ private fun RecentSection(
         val parts = med.slots.map { it.part }.sortedBy { clock.minutes(it) }
         parts.forEach { part ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                Text(part.label, style = Type.micro, color = palette.muted, modifier = Modifier.width(66.dp))
+                Text(part.label(use24), style = Type.micro, color = palette.muted, modifier = Modifier.width(66.dp))
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     days.forEach { date ->
                         HistoryCell(History.cell(views[date]?.part(part)), part, Modifier.weight(1f).height(20.dp), radius = 5)
@@ -446,8 +458,12 @@ private fun RecentSection(
         val text =
             when {
                 missed.isEmpty() -> "Nothing missed."
-                missed.size == 1 -> "Missed one: ${Format.day(missed.first().first)}, ${missed.first().second.label.lowercase()}."
-                else -> "Missed ${missed.size}. The last: ${Format.day(missed.last().first)}, ${missed.last().second.label.lowercase()}."
+
+                missed.size == 1 -> "Missed one: ${Format.day(missed.first().first)}, ${missed.first().second.label(use24).lowercase()}."
+
+                else -> "Missed ${missed.size}. The last: ${Format.day(
+                    missed.last().first,
+                )}, ${missed.last().second.label(use24).lowercase()}."
             }
         Text(text, style = Type.small, color = if (missed.isEmpty()) palette.muted else palette.alert)
     }
@@ -457,7 +473,7 @@ private fun RecentSection(
 @Composable
 internal fun HistoryCell(
     state: CellState,
-    part: DayPart,
+    part: DoseSlot,
     modifier: Modifier = Modifier,
     radius: Int = 9,
     showIcon: Boolean = false,

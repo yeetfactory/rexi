@@ -58,7 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import top.yeetfactory.rexi.core.AppLock
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.remind.RexiReceiver
 import top.yeetfactory.rexi.ui.AddFlow
 import top.yeetfactory.rexi.ui.AsNeededSheet
@@ -76,6 +76,7 @@ import top.yeetfactory.rexi.ui.SettingsScreen
 import top.yeetfactory.rexi.ui.TodayScreen
 import top.yeetfactory.rexi.ui.Type
 import java.time.LocalDate
+import java.util.UUID
 
 /** FragmentActivity, because the fingerprint prompt for the app lock needs one. */
 class MainActivity : FragmentActivity() {
@@ -294,8 +295,12 @@ private fun Home(
         stack = stack + route
     }
 
-    // A screen keeps what was typed while Android rebuilds it, under its route. Leaving it must drop that, or adding
-    // again, or editing the same medicine again, would open with what was discarded last time.
+    // Keep a draft across recreation, with a fresh state key for every new visit to Add.
+    fun openAdd() {
+        if (stack.lastOrNull()?.substringBefore(':') != "add") push("add:${UUID.randomUUID()}")
+    }
+
+    // Popped screens no longer need their saved state.
     fun leave(routes: List<String>) {
         routes.forEach(holder::removeState)
     }
@@ -338,7 +343,7 @@ private fun Home(
     val startedAdd by rememberUpdatedState(onStartedAdd)
     LaunchedEffect(startWithAdd) {
         if (startWithAdd) {
-            push("add")
+            openAdd()
             startedAdd()
         }
     }
@@ -366,7 +371,11 @@ private fun Home(
                 }
 
                 else -> {
-                    AddFlow(app = app, onSave = { pop() }, onCancel = ::pop)
+                    val close = {
+                        holder.removeState(top)
+                        stack = stack.filterNot { it == top }
+                    }
+                    AddFlow(app = app, onSave = { close() }, onCancel = close)
                 }
             }
         }
@@ -379,8 +388,8 @@ private fun Home(
                             TodayScreen(
                                 app = app,
                                 onLogDose = { sheet = "prn:$it" },
-                                onLate = { day, part -> sheet = "late:${day.toEpochDay()}:${part.name}" },
-                                onAdd = { push("add") },
+                                onLate = { day, part -> sheet = "late:${day.toEpochDay()}:${part.key}" },
+                                onAdd = ::openAdd,
                                 onOpen = { push("med:$it") },
                             )
                         }
@@ -389,7 +398,7 @@ private fun Home(
                             MedsScreen(
                                 app = app,
                                 onOpen = { push("med:$it") },
-                                onAdd = { push("add") },
+                                onAdd = ::openAdd,
                                 onLogDose = { sheet = "prn:$it" },
                                 onRefill = { push("med:$it:refill") },
                             )
@@ -419,7 +428,7 @@ private fun Home(
 
             "late" -> {
                 val day = bits.getOrNull(1)?.toLongOrNull()?.let(LocalDate::ofEpochDay)
-                val part = bits.getOrNull(2)?.let { name -> DayPart.entries.firstOrNull { it.name == name } }
+                val part = bits.getOrNull(2)?.let(DoseSlot::fromKey)
                 if (day != null && part != null) LogLateSheet(app, day, part, onDismiss = { sheet = null }) else sheet = null
             }
 

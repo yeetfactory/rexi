@@ -44,12 +44,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.CellState
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.core.History
 import top.yeetfactory.rexi.core.PartView
+import top.yeetfactory.rexi.data.DoseLog
 import top.yeetfactory.rexi.data.MedicineWithSlots
 import top.yeetfactory.rexi.report.Report
 import java.time.LocalDate
@@ -96,7 +98,10 @@ internal fun HistoryScreen(
             .values
             .flatMap { view -> view.parts.flatMap { it.doses } }
             .filter { !it.pending }
-    val takenCount = answered.count { it.state == DoseState.TAKEN }
+    val pastUnscheduled = logs.filter { it.part == null && it.historical }.groupBy { it.day }
+    val pastCount = pastUnscheduled.values.sumOf { it.size }
+    val answeredCount = answered.size + pastCount
+    val takenCount = answered.count { it.state == DoseState.TAKEN } + pastCount
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 32.dp)) {
         ScreenTitle("History") {
@@ -125,7 +130,7 @@ internal fun HistoryScreen(
                     )
                     val soFar = if (weekEnd >= today) " so far" else ""
                     Text(
-                        if (answered.isEmpty()) "Nothing logged yet" else "$takenCount of ${answered.size} taken$soFar",
+                        if (answeredCount == 0) "Nothing logged yet" else "$takenCount of $answeredCount taken$soFar",
                         style = Type.label.copy(fontWeight = Type.text.fontWeight),
                         color = palette.muted,
                     )
@@ -143,6 +148,7 @@ internal fun HistoryScreen(
             WeekGrid(
                 dates = dates,
                 views = views,
+                pastDays = pastUnscheduled.keys,
                 today = today,
                 selected = LocalDate.ofEpochDay(selectedDay),
                 onSelect = { selectedDay = it.toEpochDay() },
@@ -155,7 +161,7 @@ internal fun HistoryScreen(
                 date = day,
                 today = today,
                 parts = views[day]?.parts.orEmpty(),
-                asNeeded = logs.filter { it.part == null && it.day == day.toEpochDay() },
+                unscheduled = logs.filter { it.part == null && it.day == day.toEpochDay() },
                 medicines = byId,
                 use24 = use24,
             )
@@ -168,6 +174,7 @@ internal fun HistoryScreen(
 private fun WeekGrid(
     dates: List<LocalDate>,
     views: Map<LocalDate, top.yeetfactory.rexi.core.DayView>,
+    pastDays: Set<Long>,
     today: LocalDate,
     selected: LocalDate,
     onSelect: (LocalDate) -> Unit,
@@ -213,23 +220,48 @@ private fun WeekGrid(
             }
         }
         DayPart.entries.forEach { part ->
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    part.label,
-                    style = Type.micro.copy(fontWeight = Type.label.fontWeight),
-                    color = palette.tint(part).let { if (part == DayPart.NIGHT) palette.ink else it.label },
-                    modifier = Modifier.width(LABEL_WIDTH),
-                    maxLines = 1,
+            WeekRow(part.label, part, dates.map { History.cell(views[it]?.part(part)) })
+        }
+        val custom =
+            dates.map { date ->
+                History.cell(
+                    views[date]
+                        ?.parts
+                        .orEmpty()
+                        .filter { it.part is CustomTime }
+                        .flatMap { it.doses },
                 )
-                dates.forEach { date ->
-                    HistoryCell(
-                        History.cell(views[date]?.part(part)),
-                        part,
-                        Modifier.weight(1f).height(36.dp),
-                        showIcon = true,
-                    )
-                }
             }
+        if (custom.any { it != CellState.NONE }) WeekRow("Custom", DayPart.AFTERNOON, custom)
+        if (pastDays.isNotEmpty()) {
+            WeekRow("Past", DayPart.AFTERNOON, dates.map { if (it.toEpochDay() in pastDays) CellState.TAKEN else CellState.NONE })
+        }
+    }
+}
+
+@Composable
+private fun WeekRow(
+    label: String,
+    colorPart: DayPart,
+    cells: List<CellState>,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalPalette.current
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = Type.micro.copy(fontWeight = Type.label.fontWeight),
+            color = if (colorPart == DayPart.NIGHT) palette.ink else palette.tint(colorPart).label,
+            modifier = Modifier.width(LABEL_WIDTH),
+            maxLines = 1,
+        )
+        cells.forEach { state ->
+            HistoryCell(
+                state,
+                colorPart,
+                Modifier.weight(1f).height(36.dp),
+                showIcon = true,
+            )
         }
     }
 }
@@ -283,7 +315,7 @@ private fun DayDetail(
     date: LocalDate,
     today: LocalDate,
     parts: List<PartView>,
-    asNeeded: List<top.yeetfactory.rexi.data.DoseLog>,
+    unscheduled: List<DoseLog>,
     medicines: Map<Long, MedicineWithSlots>,
     use24: Boolean,
     modifier: Modifier = Modifier,
@@ -291,8 +323,9 @@ private fun DayDetail(
     val palette = LocalPalette.current
     val zone = ZoneId.systemDefault()
     val doses = parts.flatMap { it.doses }
-    val taken = doses.count { it.state == DoseState.TAKEN }
-    val resolved = doses.count { !it.pending }
+    val pastUnscheduled = unscheduled.count { it.historical }
+    val taken = doses.count { it.state == DoseState.TAKEN } + pastUnscheduled
+    val resolved = doses.count { !it.pending } + pastUnscheduled
     Column(
         modifier
             .fillMaxWidth()
@@ -309,7 +342,7 @@ private fun DayDetail(
             )
             Text(
                 when {
-                    doses.isEmpty() -> "Nothing scheduled"
+                    doses.isEmpty() && pastUnscheduled == 0 -> "Nothing scheduled"
                     date == today -> "$taken taken so far"
                     else -> "$taken of $resolved taken"
                 },
@@ -321,15 +354,17 @@ private fun DayDetail(
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
             PartLine(part, medicines, use24, zone)
         }
-        if (asNeeded.isNotEmpty()) {
+        unscheduled.groupBy { it.historical }.forEach { (past, entries) ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
             Column(Modifier.padding(vertical = 10.dp)) {
-                Text("As needed", style = Type.label, color = palette.muted)
+                Text(if (past) "Past doses" else "As needed", style = Type.label, color = palette.muted)
                 Spacer(Modifier.height(4.dp))
-                asNeeded.sortedBy { it.at }.forEach { log ->
-                    val name = medicines[log.medicineId]?.medicine?.title ?: "A medicine"
+                entries.sortedBy { it.at }.forEach { log ->
+                    val medicine = medicines[log.medicineId]?.medicine
+                    val name = medicine?.title ?: "A medicine"
+                    val amount = if (past && medicine != null) ", ${medicine.amount(log.amount)}" else ""
                     val reason = if (log.reason.isNotBlank()) ", ${log.reason.lowercase()}" else ""
-                    Text("$name at ${Format.time(log.at, zone, use24)}$reason", style = Type.text, color = palette.ink)
+                    Text("$name$amount at ${Format.time(log.at, zone, use24)}$reason", style = Type.text, color = palette.ink)
                 }
             }
         }
@@ -350,17 +385,35 @@ private fun PartLine(
     val states = part.doses.map { it.state }
     val (icon, status, color) =
         when {
-            DoseState.MISSED in states -> Triple(RexiIcons.Cross, "Missed", palette.alert)
-            DoseState.SKIPPED in states -> Triple(RexiIcons.Cross, "Skipped", palette.alert)
-            DoseState.DUE in states -> Triple(null, "Due now", palette.ink)
-            DoseState.LATER in states -> Triple(null, "At ${Format.time(part.minutes, use24)}", palette.muted)
-            else -> Triple(RexiIcons.Check, "Taken ${part.takenAt?.let { Format.time(it, zone, use24) }.orEmpty()}", palette.muted)
+            DoseState.MISSED in states -> {
+                Triple(RexiIcons.Cross, "Missed", palette.alert)
+            }
+
+            DoseState.SKIPPED in states -> {
+                Triple(RexiIcons.Cross, "Skipped", palette.alert)
+            }
+
+            DoseState.DUE in states -> {
+                Triple(null, "Due now", palette.ink)
+            }
+
+            DoseState.LATER in states -> {
+                Triple(
+                    null,
+                    if (part.part is CustomTime) "Later" else "At ${Format.time(part.minutes, use24)}",
+                    palette.muted,
+                )
+            }
+
+            else -> {
+                Triple(RexiIcons.Check, "Taken ${part.takenAt?.let { Format.time(it, zone, use24) }.orEmpty()}", palette.muted)
+            }
         }
     val reason = part.doses.firstOrNull { it.reason.isNotBlank() }?.reason
     Column(modifier.fillMaxWidth().padding(vertical = 10.dp).semantics(mergeDescendants = true) {}) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                part.part.label,
+                part.part.label(use24),
                 style = Type.label,
                 color =
                     if (part.part ==
@@ -391,13 +444,26 @@ private fun PartLine(
             )
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            part.doses.mapNotNull { medicines[it.medId]?.medicine?.title }.joinToString(", "),
-            style = Type.body.copy(fontSize = Type.text.fontSize),
-            color = palette.ink,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (part.doses.any { it.historical }) {
+            part.doses.forEach { dose ->
+                val med = medicines[dose.medId]?.medicine ?: return@forEach
+                val time =
+                    if (dose.state == DoseState.TAKEN && dose.at != null) {
+                        " at ${Format.time(dose.at, zone, use24)}"
+                    } else {
+                        ""
+                    }
+                Text("${med.title}, ${med.amount(dose.amount)}$time", style = Type.text, color = palette.ink)
+            }
+        } else {
+            Text(
+                part.doses.mapNotNull { medicines[it.medId]?.medicine?.title }.joinToString(", "),
+                style = Type.body.copy(fontSize = Type.text.fontSize),
+                color = palette.ink,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (reason != null) {
             Spacer(Modifier.height(2.dp))
             Text(

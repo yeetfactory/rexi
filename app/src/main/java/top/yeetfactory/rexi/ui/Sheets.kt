@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.AsNeeded
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.remind.DoseActions
@@ -304,7 +305,7 @@ private fun StatTile(
 internal fun LogLateSheet(
     app: RexiApp,
     day: LocalDate,
-    part: DayPart,
+    part: DoseSlot,
     onDismiss: () -> Unit,
 ) {
     val palette = LocalPalette.current
@@ -362,14 +363,14 @@ internal fun LogLateSheet(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (meds.size == 1) meds.first().medicine.title else "${part.label}, ${meds.size} medicines",
+                        if (meds.size == 1) meds.first().medicine.title else "${part.label(use24)}, ${meds.size} medicines",
                         style = Type.title.copy(fontSize = Type.title.fontSize * 0.86f),
                         color = palette.ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${part.label} dose, due at ${Format.time(settings.minutes(part), use24)}",
+                        "${if (part is DayPart) part.label else "Scheduled"} dose, due at ${Format.time(settings.minutes(part), use24)}",
                         style = Type.text,
                         color = palette.muted,
                     )

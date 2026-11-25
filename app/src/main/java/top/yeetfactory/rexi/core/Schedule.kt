@@ -1,7 +1,9 @@
 package top.yeetfactory.rexi.core
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /** What scheduling needs to know about a medicine, without Room or Android. */
@@ -13,7 +15,7 @@ data class Plan(
     val everyDays: Int,
     val startDay: LocalDate,
     val courseDays: Int,
-    val slots: Map<DayPart, Double>,
+    val slots: Map<out DoseSlot, Double>,
     /** False while reminders are paused or after the person stopped taking it. */
     val active: Boolean,
     /**
@@ -26,9 +28,20 @@ data class Plan(
 data class ScheduledDose(
     val medId: Long,
     val date: LocalDate,
-    val part: DayPart,
+    val part: DoseSlot,
     val amount: Double,
 )
+
+/** A dose the person took before saving a new medicine. */
+data class PastDose(
+    val at: Long,
+    val amount: Double,
+    val part: DoseSlot? = null,
+) {
+    companion object {
+        const val DAYS_BACK = 30L
+    }
+}
 
 object Schedule {
     const val ALL_DAYS = 0b111_1111
@@ -72,6 +85,20 @@ object Schedule {
         now: Long,
     ): Boolean = snoozedUntil > now && snoozedUntil > dueAt
 
+    /** When a custom slot should ring. A snooze is still honored when automatic repeats are off. */
+    fun customRingAt(
+        dueAt: Long,
+        rangAt: Long,
+        snoozedUntil: Long,
+        repeatAfter: Long?,
+    ): Long? =
+        when {
+            snoozedUntil > maxOf(dueAt, rangAt) -> snoozedUntil
+            rangAt < dueAt -> dueAt
+            repeatAfter != null -> rangAt + repeatAfter
+            else -> null
+        }
+
     /** The first day from [from] on that has a dose, looking up to a year ahead. Null when nothing is scheduled. */
     fun nextDue(
         plan: Plan,
@@ -103,6 +130,38 @@ object Schedule {
         plans
             .filter { isDueOn(it, date) }
             .flatMap { plan -> plan.slots.map { (part, amount) -> ScheduledDose(plan.id, date, part, amount) } }
+
+    /** The scheduled doses the person is confirming from the first dose through a fixed cutoff. */
+    fun pastDoses(
+        plan: Plan,
+        first: DoseSlot,
+        through: Long,
+        clock: DayClock,
+        zone: ZoneId,
+    ): List<PastDose> {
+        val start = plan.startDay
+        val end = Instant.ofEpochMilli(through).atZone(zone).toLocalDate()
+        val days = ChronoUnit.DAYS.between(start, end)
+        if (days !in 0L..PastDose.DAYS_BACK || first !in plan.slots.keys || !isDueOn(plan, start)) return emptyList()
+        val firstMinute = clock.minutes(first)
+        val slots = plan.slots.entries.sortedBy { clock.minutes(it.key) }
+        return buildList {
+            for (offset in 0L..days) {
+                val date = start.plusDays(offset)
+                if (!isDueOn(plan, date)) continue
+                for ((part, amount) in slots) {
+                    if (offset == 0L && clock.minutes(part) < firstMinute) continue
+                    val at =
+                        clock
+                            .dueAt(date, part)
+                            .atZone(zone)
+                            .toInstant()
+                            .toEpochMilli()
+                    if (at <= through) add(PastDose(at, amount, part))
+                }
+            }
+        }
+    }
 
     /** The average amount used per day, for supply estimates. Null for medicines taken only when needed. */
     fun dailyUse(plan: Plan): Double? {
