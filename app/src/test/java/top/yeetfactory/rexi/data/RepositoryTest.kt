@@ -8,15 +8,22 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import top.yeetfactory.rexi.core.CustomTime
+import top.yeetfactory.rexi.core.DayBook
+import top.yeetfactory.rexi.core.DayClock
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.DoseUnit
+import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.Frequency
+import top.yeetfactory.rexi.core.PastDose
 import top.yeetfactory.rexi.core.SupplyMode
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -134,7 +141,7 @@ class RepositoryTest {
             assertEquals(mapOf(DayPart.NIGHT to 2.0), db.dao().medicine(id)!!.amounts)
         }
 
-    @Test fun `changing when doses fall starts the schedule again, a new amount doesn't`() =
+    @Test fun `changing when doses fall starts the schedule again, a new amount or food instruction doesn't`() =
         runTest {
             var now = 1_000L
             val clocked = Repository(db, clock = { now }, zone = { ZoneOffset.UTC })
@@ -147,7 +154,13 @@ class RepositoryTest {
                     .medicine.scheduleFrom,
             )
             now = 2_000L
-            clocked.save(db.dao().medicine(id)!!.medicine, mapOf(DayPart.MORNING to 2.0))
+            val changed =
+                db
+                    .dao()
+                    .medicine(id)!!
+                    .medicine
+                    .copy(food = Food.AFTER_FOOD, daysMask = 1)
+            clocked.save(changed, mapOf(DayPart.MORNING to 2.0))
             assertEquals(
                 1_000L,
                 db
@@ -164,5 +177,99 @@ class RepositoryTest {
                     .medicine(id)!!
                     .medicine.scheduleFrom,
             )
+        }
+
+    @Test fun `past doses are saved at the entered time without creating misses or using current supply`() =
+        runTest {
+            val past = day.minusDays(30)
+            val takenAt = past.atTime(6, 41).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val now = day.atTime(12, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val clocked = Repository(db, clock = { now }, zone = { ZoneOffset.UTC })
+            val dawn = CustomTime(6 * 60 + 30)
+            val afternoon = CustomTime(14 * 60)
+            val id =
+                clocked.save(
+                    Medicine(name = "Example", startDay = day.toEpochDay(), supplyMode = SupplyMode.COUNT, supplyCount = 30.0),
+                    mapOf(dawn to 1.0, afternoon to 1.0),
+                    listOf(PastDose(takenAt, 2.0, dawn), PastDose(takenAt + 60_000, 1.0)),
+                )
+            val saved = db.dao().medicine(id)!!
+            assertEquals(mapOf(dawn to 1.0, afternoon to 1.0), saved.amounts)
+            assertEquals(now, saved.medicine.scheduleFrom)
+            val logs = db.dao().logs(past.toEpochDay(), day.toEpochDay())
+            assertEquals(2, logs.size)
+            val clock = DayClock(emptyMap(), 180)
+            val view = DayBook.build(past, listOf(saved.plan(ZoneOffset.UTC)), logs.map { it.logged() }, day.atTime(12, 0), clock)
+            assertNull(view.part(afternoon))
+            assertEquals(takenAt, view.part(dawn)?.takenAt)
+            assertEquals(
+                2.0,
+                view
+                    .part(dawn)!!
+                    .doses
+                    .single()
+                    .amount,
+                0.0,
+            )
+            assertFalse(clocked.markMissed(id, past, dawn, 1.0))
+            assertEquals(30.0, count(id), 0.0)
+            clocked.undo(id, past, dawn)
+            clocked.undoAsNeeded(logs.single { it.part == null }.id)
+            assertEquals(30.0, count(id), 0.0)
+        }
+
+    @Test fun `a confirmed range excludes earlier hours and leaves later doses due`() =
+        runTest {
+            fun time(
+                hour: Int,
+                minute: Int,
+            ): Long = day.atTime(hour, minute).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val through = time(21, 0)
+            val now = time(21, 20)
+            val clocked = Repository(db, clock = { now }, zone = { ZoneOffset.UTC })
+            val before = CustomTime(20 * 60 + 15)
+            val first = CustomTime(20 * 60 + 45)
+            val later = CustomTime(21 * 60 + 5)
+            val id =
+                clocked.save(
+                    Medicine(name = "Example", startDay = day.toEpochDay(), supplyMode = SupplyMode.COUNT, supplyCount = 14.0),
+                    mapOf(before to 1.0, first to 1.0, later to 1.0),
+                    listOf(PastDose(time(20, 45), 1.0, first)),
+                    pastDosesThrough = through,
+                )
+            val saved = db.dao().medicine(id)!!
+            val logs = db.dao().allLogs().map { it.logged() }
+            val view = DayBook.build(day, listOf(saved.plan(ZoneOffset.UTC)), logs, day.atTime(21, 20), DayClock(emptyMap(), 180))
+            assertNull(view.part(before))
+            assertEquals(
+                DoseState.TAKEN,
+                view
+                    .part(first)
+                    ?.doses
+                    ?.single()
+                    ?.state,
+            )
+            assertEquals(
+                DoseState.DUE,
+                view
+                    .part(later)
+                    ?.doses
+                    ?.single()
+                    ?.state,
+            )
+            assertEquals(14.0, count(id), 0.0)
+        }
+
+    @Test fun `a future past dose leaves no partial medicine behind`() =
+        runTest {
+            val now = day.atTime(12, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val clocked = Repository(db, clock = { now }, zone = { ZoneOffset.UTC })
+            val result =
+                runCatching {
+                    clocked.save(Medicine(name = "Example", startDay = day.toEpochDay()), emptyMap(), listOf(PastDose(now + 1, 1.0)))
+                }
+            assertTrue(result.exceptionOrNull() is IllegalArgumentException)
+            assertTrue(db.dao().allMedicines().isEmpty())
+            assertTrue(db.dao().allLogs().isEmpty())
         }
 }

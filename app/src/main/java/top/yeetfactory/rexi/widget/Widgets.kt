@@ -56,6 +56,7 @@ import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayClock
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DayView
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.Format
@@ -225,11 +226,11 @@ private object Colors {
     val onPrimary = pair(LightPalette.onPrimary, DarkPalette.onPrimary)
     val alert = pair(LightPalette.alert, DarkPalette.alert)
 
-    fun background(part: DayPart) = pair(LightPalette.tint(part).background, DarkPalette.tint(part).background)
+    fun background(part: DoseSlot) = pair(LightPalette.tint(part).background, DarkPalette.tint(part).background)
 
-    fun label(part: DayPart) = pair(LightPalette.tint(part).label, DarkPalette.tint(part).label)
+    fun label(part: DoseSlot) = pair(LightPalette.tint(part).label, DarkPalette.tint(part).label)
 
-    fun ink(part: DayPart) = pair(LightPalette.tint(part).ink, DarkPalette.tint(part).ink)
+    fun ink(part: DoseSlot) = pair(LightPalette.tint(part).ink, DarkPalette.tint(part).ink)
 
     private fun pair(
         day: Color,
@@ -249,7 +250,7 @@ class TakeAction : ActionCallback {
     ) {
         val app = context.applicationContext as RexiApp
         val day = parameters[DAY_KEY] ?: return
-        val part = parameters[PART_KEY]?.let { name -> DayPart.entries.firstOrNull { it.name == name } } ?: return
+        val part = parameters[PART_KEY]?.let(DoseSlot::fromKey) ?: return
         app.doses.take(LocalDate.ofEpochDay(day), part)
         Widgets.update(context)
     }
@@ -310,7 +311,7 @@ private fun names(
     data: WidgetData,
 ): String =
     if (data.hideNames) {
-        "${part.part.label} dose"
+        "${part.part.label(data.use24)} dose"
     } else {
         part.doses.mapNotNull { data.medicines[it.medId]?.medicine?.title }.joinToString(", ")
     }
@@ -336,8 +337,9 @@ private fun TodayContent(data: WidgetData) {
             Text(if (data.medicines.isEmpty()) "Add a medicine in Rexi" else "Nothing scheduled today", style = style(13, Colors.muted))
             return@Column
         }
+        val displayed = (listOfNotNull(view.due, view.next) + view.parts).distinct().take(4).sortedBy { it.minutes }
         Row(GlanceModifier.fillMaxWidth()) {
-            view.parts.forEachIndexed { index, part ->
+            displayed.forEachIndexed { index, part ->
                 if (index > 0) Spacer(GlanceModifier.width(6.dp))
                 Column(
                     GlanceModifier
@@ -347,13 +349,13 @@ private fun TodayContent(data: WidgetData) {
                         .cornerRadius(16.dp)
                         .padding(horizontal = 8.dp, vertical = 7.dp),
                 ) {
-                    Text(part.part.label, style = style(10, Colors.label(part.part), bold = true), maxLines = 1)
+                    Text(part.part.label(data.use24), style = style(10, Colors.label(part.part), bold = true), maxLines = 1)
                     val status =
                         when (part.state) {
                             PartState.DONE -> outcome(part)
                             PartState.DUE -> if (data.snoozedUntil != null) "Snoozed" else "Due"
                             PartState.MISSED -> "Missed"
-                            PartState.LATER -> Format.time(part.minutes, data.use24)
+                            PartState.LATER -> if (part.part is DayPart) Format.time(part.minutes, data.use24) else "Later"
                         }
                     Text(
                         status,
@@ -437,7 +439,7 @@ private fun TakeButton(
             .background(if (light) Colors.ink(part.part) else Colors.primary)
             .cornerRadius(22.dp)
             .padding(horizontal = 18.dp, vertical = 10.dp)
-            .clickable(actionRunCallback<TakeAction>(actionParametersOf(DAY_KEY to data.date.toEpochDay(), PART_KEY to part.part.name))),
+            .clickable(actionRunCallback<TakeAction>(actionParametersOf(DAY_KEY to data.date.toEpochDay(), PART_KEY to part.part.key))),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, style = style(14, if (light) Colors.background(part.part) else Colors.onPrimary, bold = true))
@@ -475,9 +477,9 @@ private fun NextContent(data: WidgetData) {
     ) {
         val heading =
             if (due && data.snoozedUntil != null) {
-                "${shown.part.label}, snoozed"
+                if (shown.part is DayPart) "${shown.part.label}, snoozed" else "Snoozed"
             } else if (due) {
-                shown.part.label
+                if (shown.part is DayPart) shown.part.label else "Due now"
             } else {
                 "Next"
             }
@@ -487,7 +489,7 @@ private fun NextContent(data: WidgetData) {
         Spacer(GlanceModifier.defaultWeight())
         if (due) {
             TakeButton(shown, data, "Take", GlanceModifier.fillMaxWidth(), onTint = true)
-        } else {
+        } else if (shown.part is DayPart) {
             Text(shown.part.label, style = style(12, Colors.muted))
         }
     }

@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -38,9 +40,10 @@ private fun DialogButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     color: Color = LocalPalette.current.ink,
+    enabled: Boolean = true,
 ) {
-    TextButton(onClick = onClick, modifier = modifier) {
-        Text(text, style = Type.body, color = color)
+    TextButton(onClick = onClick, modifier = modifier, enabled = enabled) {
+        Text(text, style = Type.body, color = if (enabled) color else LocalPalette.current.faint)
     }
 }
 
@@ -52,30 +55,36 @@ internal fun TimeDialog(
     minutes: Int,
     onPick: (Int) -> Unit,
     onDismiss: () -> Unit,
+    validate: (Int) -> String? = { null },
 ) {
     val palette = LocalPalette.current
     val state = rememberTimePickerState(initialHour = minutes / 60, initialMinute = minutes % 60, is24Hour = rememberUse24h())
+    val picked = state.hour * 60 + state.minute
+    val error = validate(picked)
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = palette.surface,
         title = { Text(title, style = Type.heading, color = palette.ink) },
         text = {
-            TimePicker(
-                state = state,
-                colors =
-                    TimePickerDefaults.colors(
-                        clockDialColor = palette.well,
-                        selectorColor = palette.primary,
-                        periodSelectorSelectedContainerColor = palette.primary,
-                        periodSelectorSelectedContentColor = palette.onPrimary,
-                        timeSelectorSelectedContainerColor = palette.primary,
-                        timeSelectorSelectedContentColor = palette.onPrimary,
-                        timeSelectorUnselectedContainerColor = palette.well,
-                        timeSelectorUnselectedContentColor = palette.ink,
-                    ),
-            )
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                TimePicker(
+                    state = state,
+                    colors =
+                        TimePickerDefaults.colors(
+                            clockDialColor = palette.well,
+                            selectorColor = palette.primary,
+                            periodSelectorSelectedContainerColor = palette.primary,
+                            periodSelectorSelectedContentColor = palette.onPrimary,
+                            timeSelectorSelectedContainerColor = palette.primary,
+                            timeSelectorSelectedContentColor = palette.onPrimary,
+                            timeSelectorUnselectedContainerColor = palette.well,
+                            timeSelectorUnselectedContentColor = palette.ink,
+                        ),
+                )
+                if (error != null) Text(error, style = Type.small, color = palette.alert)
+            }
         },
-        confirmButton = { DialogButton("Done", { onPick(state.hour * 60 + state.minute) }) },
+        confirmButton = { DialogButton("Done", { onPick(picked) }, enabled = error == null) },
         dismissButton = { DialogButton("Cancel", onDismiss, color = palette.muted) },
     )
 }
@@ -95,7 +104,7 @@ internal fun <T> ChoiceDialog(
         containerColor = palette.surface,
         title = { Text(title, style = Type.heading, color = palette.ink) },
         text = {
-            Column(Modifier.selectableGroup()) {
+            Column(Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
                 options.forEach { (value, label) ->
                     val on = value == selected
                     Row(

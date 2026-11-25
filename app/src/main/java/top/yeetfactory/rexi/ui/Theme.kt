@@ -30,7 +30,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.delay
 import top.yeetfactory.rexi.R
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 
 /** The colours of one part of the day. Each compartment, tag and chart cell uses its part's set. */
 @Immutable
@@ -75,17 +77,18 @@ data class Palette(
      */
     val nightLater: Tint,
 ) {
-    fun tint(part: DayPart): Tint =
+    fun tint(part: DoseSlot): Tint =
         when (part) {
             DayPart.MORNING -> morning
             DayPart.AFTERNOON -> afternoon
             DayPart.EVENING -> evening
             DayPart.NIGHT -> night
+            is CustomTime -> afternoon
         }
 
     /** A compartment on Today. Only a later Night differs from its tag colours. */
     fun compartment(
-        part: DayPart,
+        part: DoseSlot,
         later: Boolean,
     ): Tint = if (later && part == DayPart.NIGHT) nightLater else tint(part)
 }

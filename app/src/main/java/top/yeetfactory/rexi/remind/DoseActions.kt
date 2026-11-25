@@ -2,8 +2,8 @@ package top.yeetfactory.rexi.remind
 
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayBook
-import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DayView
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.data.MedicineWithSlots
 import java.time.LocalDate
@@ -36,7 +36,7 @@ class DoseActions(
     /** Takes every dose in a compartment that isn't answered yet, or only [only] when given. Returns what was taken. */
     suspend fun take(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         at: Long = repository.now(),
         only: Set<Long>? = null,
         includeMissed: Boolean = false,
@@ -57,7 +57,7 @@ class DoseActions(
     /** Takes one dose whatever its state, for correcting the record: a skip that was really taken, or taking early. */
     suspend fun takeOne(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         medId: Long,
         amount: Double,
     ) {
@@ -74,7 +74,7 @@ class DoseActions(
 
     suspend fun skip(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         reason: String = "",
         only: Set<Long>? = null,
     ) {
@@ -90,7 +90,7 @@ class DoseActions(
 
     suspend fun snooze(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         minutes: Int,
     ): Long {
         val until = repository.now() + minutes * MINUTE_MS
@@ -102,7 +102,7 @@ class DoseActions(
 
     suspend fun undo(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         medIds: Collection<Long>,
     ) {
         medIds.forEach { repository.undo(it, day, part) }
@@ -110,7 +110,7 @@ class DoseActions(
 
     private fun settle(
         day: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ) {
         app.settings.clearSnooze(day, part)
         app.notifier.cancelDose(day, part)

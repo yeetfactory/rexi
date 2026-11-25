@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.core.Schedule
@@ -40,7 +41,7 @@ import java.time.LocalDate
 internal fun ReminderScreen(
     app: RexiApp,
     day: LocalDate,
-    part: DayPart,
+    part: DoseSlot,
     onFinish: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -66,7 +67,11 @@ internal fun ReminderScreen(
             .padding(horizontal = 24.dp)
             .padding(top = 40.dp, bottom = 20.dp),
     ) {
-        Text("${part.label} dose", style = Type.body.copy(fontWeight = Type.name.fontWeight), color = tint.label)
+        Text(
+            if (part is DayPart) "${part.label} dose" else "Scheduled dose",
+            style = Type.body.copy(fontWeight = Type.name.fontWeight),
+            color = tint.label,
+        )
         Text(
             Format.time(compartment?.minutes ?: app.settings.value.minutes(part), use24),
             style = Type.clock,

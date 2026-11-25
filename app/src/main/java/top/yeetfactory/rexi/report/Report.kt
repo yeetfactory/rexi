@@ -13,7 +13,9 @@ import kotlinx.coroutines.withContext
 import top.yeetfactory.rexi.R
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayBook
+import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseState
+import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.data.MedicineWithSlots
@@ -52,6 +54,7 @@ object Report {
                     .map { it.logged() }
             val settings = app.settings.value
             val now = LocalDateTime.now(zone)
+            val use24 = DateFormat.is24HourFormat(app)
             val plans = medicines.map { it.plan() }
             val tallies = mutableMapOf<Long, Tally>()
             (0 until DAYS).map { from.plusDays(it.toLong()) }.forEach { date ->
@@ -64,15 +67,15 @@ object Report {
                         } else {
                             val word = if (dose.state == DoseState.SKIPPED) "skipped" else "missed"
                             val reason = if (dose.reason.isNotBlank()) ", ${dose.reason.lowercase()}" else ""
-                            tally.misses += "${Format.day(date)} ${part.part.label.lowercase()} ($word$reason)"
+                            tally.misses += "${Format.day(date)} ${part.part.label(use24).lowercase()} ($word$reason)"
                         }
                     }
                 }
             }
-            val asNeeded = logs.filter { it.part == null && it.status == top.yeetfactory.rexi.core.DoseStatus.TAKEN }.groupBy { it.medId }
+            val unscheduled = logs.filter { it.part == null && it.status == DoseStatus.TAKEN }.groupBy { it.medId }
             val included =
                 medicines.filter { med ->
-                    !med.medicine.archived || (tallies[med.id]?.due ?: 0) > 0 || asNeeded.containsKey(med.id)
+                    !med.medicine.archived || (tallies[med.id]?.due ?: 0) > 0 || unscheduled.containsKey(med.id)
                 }
 
             val document = PdfDocument()
@@ -81,7 +84,7 @@ object Report {
             writer.line("Last $DAYS days: ${Format.range(from, today)} ${today.year}", writer.body)
             writer.line("Made on ${Format.fullDate(today)} with Rexi.", writer.muted, gapAfter = 18f)
             if (included.isEmpty()) writer.line("No medicines were recorded in this period.", writer.body)
-            included.forEach { med -> writer.medicine(med, tallies[med.id], asNeeded[med.id].orEmpty().size, today) }
+            included.forEach { med -> writer.medicine(med, tallies[med.id], unscheduled[med.id].orEmpty().size, today) }
             writer.line(
                 "Rexi records what the person logged on their own phone. A dose marked as taken was logged, not observed.",
                 writer.muted,
@@ -114,7 +117,7 @@ object Report {
     private fun Writer.medicine(
         med: MedicineWithSlots,
         tally: Tally?,
-        asNeededCount: Int,
+        unscheduledCount: Int,
         today: LocalDate,
     ) {
         val m = med.medicine
@@ -122,23 +125,26 @@ object Report {
         ensure(90f)
         line(listOf(m.title, m.strengthText).filter { it.isNotBlank() }.joinToString(" ") + stopped, heading, gapAfter = 4f)
         if (m.purpose.isNotBlank()) line("For ${m.purpose.lowercase()}.", body)
+        val food = if (m.food != Food.ANY) ", ${m.food.label.lowercase()}" else ""
         if (med.asNeeded) {
             val rules =
                 listOfNotNull(
                     if (m.minGapHours > 0) "at least ${m.minGapHours} hours apart" else null,
                     if (m.maxPerDay > 0) "up to ${m.maxPerDay} a day" else null,
                 ).joinToString(", ")
-            line("Taken only when needed${if (rules.isNotEmpty()) ", $rules" else ""}.", body)
-            line(if (asNeededCount == 1) "Taken once in this period." else "Taken $asNeededCount times in this period.", body)
+            line("Taken only when needed$food${if (rules.isNotEmpty()) ", $rules" else ""}.", body)
+            line(if (unscheduledCount == 1) "Taken once in this period." else "Taken $unscheduledCount times in this period.", body)
         } else {
             val settings = app.settings.value
             // The report follows the phone's clock like the rest of the app, so it matches what the person sees.
             val use24 = DateFormat.is24HourFormat(app)
             val parts =
                 med.slots.sortedBy { settings.minutes(it.part) }.joinToString(", ") {
-                    "${m.amount(it.amount)} ${Format.inPart(it.part)} (${Format.time(settings.minutes(it.part), use24)})"
+                    val part = it.part
+                    val time = Format.time(settings.minutes(part), use24)
+                    val whenTaken = if (part is DayPart) "${Format.inPart(part)} ($time)" else "at $time"
+                    "${m.amount(it.amount)} $whenTaken"
                 }
-            val food = if (m.food != Food.ANY) ", ${m.food.label.lowercase()}" else ""
             line("${shortSchedule(med, today)}: $parts$food.", body)
             val due = tally?.due ?: 0
             val taken = tally?.taken ?: 0
@@ -149,6 +155,7 @@ object Report {
             } else {
                 line("No doses were due in this period.", body)
             }
+            if (unscheduledCount > 0) line("$unscheduledCount additional doses logged.", body)
             val misses = tally?.misses.orEmpty()
             if (misses.isNotEmpty()) {
                 val shown = misses.takeLast(MAX_LISTED)

@@ -3,15 +3,16 @@ package top.yeetfactory.rexi.core
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-/** A dose someone answered, or one the app marked as missed. A null part means an as-needed dose. */
+/** A dose someone answered, or one the app marked as missed. A null part means an unscheduled log. */
 data class Logged(
     val medId: Long,
     val date: LocalDate,
-    val part: DayPart?,
+    val part: DoseSlot?,
     val status: DoseStatus,
     val at: Long,
     val amount: Double,
     val reason: String = "",
+    val historical: Boolean = false,
 )
 
 enum class DoseState {
@@ -32,6 +33,7 @@ data class DoseView(
     val state: DoseState,
     val at: Long?,
     val reason: String,
+    val historical: Boolean = false,
 ) {
     val pending: Boolean get() = state == DoseState.DUE || state == DoseState.LATER
 }
@@ -48,7 +50,7 @@ enum class PartState {
 
 /** One compartment of one day. */
 data class PartView(
-    val part: DayPart,
+    val part: DoseSlot,
     val minutes: Int,
     val doses: List<DoseView>,
 ) {
@@ -80,7 +82,7 @@ data class DayView(
     /** The next compartment whose time hasn't come. */
     val next: PartView? get() = parts.firstOrNull { it.state == PartState.LATER }
 
-    fun part(part: DayPart): PartView? = parts.firstOrNull { it.part == part }
+    fun part(part: DoseSlot): PartView? = parts.firstOrNull { it.part == part }
 }
 
 /** The person's own times for each part of the day, and how long a dose waits before it counts as missed. */
@@ -88,16 +90,20 @@ data class DayClock(
     val partMinutes: Map<DayPart, Int>,
     val missedAfterMinutes: Int,
 ) {
-    fun minutes(part: DayPart): Int = partMinutes[part] ?: part.defaultMinutes
+    fun minutes(part: DoseSlot): Int =
+        when (part) {
+            is DayPart -> partMinutes[part] ?: part.defaultMinutes
+            is CustomTime -> part.minutes
+        }
 
     fun dueAt(
         date: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ): LocalDateTime = date.atStartOfDay().plusMinutes(minutes(part).toLong())
 
     fun missedAt(
         date: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
     ): LocalDateTime = dueAt(date, part).plusMinutes(missedAfterMinutes.toLong())
 }
 
@@ -120,12 +126,14 @@ object DayBook {
                 val from = startsAt[dose.medId]
                 from == null || clock.dueAt(date, dose.part) >= from
             }
-        val dayLogs = logs.filter { it.date == date && it.part != null }
+        val bySlot = scheduled.groupBy { it.part }
+        val dayLogs = logs.filter { it.date == date && it.part != null }.groupBy { it.part }
         val parts =
-            DayPart.entries.mapNotNull { part ->
+            (bySlot.keys + dayLogs.keys.filterNotNull()).map { part ->
+                val answers = dayLogs[part].orEmpty().associateBy { it.medId }
                 val views =
-                    scheduled.filter { it.part == part }.map { dose ->
-                        val log = dayLogs.firstOrNull { it.medId == dose.medId && it.part == part }
+                    bySlot[part].orEmpty().map { dose ->
+                        val log = answers[dose.medId]
                         val state =
                             when {
                                 log != null -> log.status.state
@@ -133,17 +141,18 @@ object DayBook {
                                 now >= clock.dueAt(date, part) -> DoseState.DUE
                                 else -> DoseState.LATER
                             }
-                        DoseView(dose.medId, dose.amount, state, log?.at, log?.reason.orEmpty())
+                        if (log == null) DoseView(dose.medId, dose.amount, state, null, "") else log.view()
                     }
                 val extra =
-                    dayLogs
-                        .filter { log -> log.part == part && views.none { it.medId == log.medId } }
-                        .map { DoseView(it.medId, it.amount, it.status.state, it.at, it.reason) }
-                val all = views + extra
-                if (all.isEmpty()) null else PartView(part, clock.minutes(part), all)
+                    answers.values
+                        .filter { log -> views.none { it.medId == log.medId } }
+                        .map { it.view() }
+                PartView(part, clock.minutes(part), views + extra)
             }
-        return DayView(date, parts.sortedBy { it.minutes })
+        return DayView(date, parts.sortedWith(compareBy({ it.minutes }, { (it.part as? DayPart)?.ordinal ?: DayPart.entries.size })))
     }
+
+    private fun Logged.view() = DoseView(medId, amount, status.state, at, reason, historical)
 
     private val DoseStatus.state: DoseState
         get() =
@@ -164,9 +173,11 @@ enum class CellState {
 }
 
 object History {
-    fun cell(part: PartView?): CellState {
-        if (part == null) return CellState.NONE
-        val states = part.doses.map { it.state }
+    fun cell(part: PartView?): CellState = cell(part?.doses.orEmpty())
+
+    fun cell(doses: List<DoseView>): CellState {
+        if (doses.isEmpty()) return CellState.NONE
+        val states = doses.map { it.state }
         return when {
             DoseState.MISSED in states || DoseState.SKIPPED in states -> CellState.MISSED
             DoseState.DUE in states -> CellState.DUE

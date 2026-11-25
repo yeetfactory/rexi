@@ -141,4 +141,41 @@ class DayBookTest {
                 .state,
         )
     }
+
+    @Test fun `custom times have separate answers and stay fixed when preset times change`() {
+        val dawn = CustomTime(6 * 60 + 30)
+        val midday = CustomTime(12 * 60)
+        val late = CustomTime(23 * 60 + 45)
+        val plan = metformin.copy(slots = mapOf(late to 3.0, dawn to 1.0, midday to 2.0))
+        val logs = listOf(Logged(plan.id, day, dawn, DoseStatus.TAKEN, 1, 1.0))
+        val changed = clock.copy(partMinutes = mapOf(DayPart.MORNING to midday.minutes))
+        val view = DayBook.build(day, listOf(plan), logs, at(12), changed)
+
+        assertEquals(listOf(dawn, midday, late), view.parts.map { it.part })
+        assertEquals(
+            DoseState.TAKEN,
+            view
+                .part(dawn)
+                ?.doses
+                ?.single()
+                ?.state,
+        )
+        assertEquals(
+            DoseState.DUE,
+            view
+                .part(midday)
+                ?.doses
+                ?.single()
+                ?.state,
+        )
+        assertEquals(
+            DoseState.LATER,
+            view
+                .part(late)
+                ?.doses
+                ?.single()
+                ?.state,
+        )
+        assertEquals(6.0, Schedule.dailyUse(plan)!!, 0.0)
+    }
 }

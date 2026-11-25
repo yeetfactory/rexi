@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -60,7 +61,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlinx.parcelize.Parcelize
 import top.yeetfactory.rexi.RexiApp
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseUnit
 import top.yeetfactory.rexi.core.Food
 import top.yeetfactory.rexi.core.Format
@@ -75,6 +78,7 @@ import top.yeetfactory.rexi.data.Medicine
 import top.yeetfactory.rexi.data.MedicineWithSlots
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -99,8 +103,10 @@ internal data class Draft(
     val color2: MedColor = MedColor.WHITE,
     val frequency: Frequency = Frequency.EVERY_DAY,
     val parts: Set<DayPart> = setOf(DayPart.MORNING),
+    val custom: Boolean = false,
+    val customMinutes: Set<Int> = emptySet(),
     val eachTime: Double = 1.0,
-    val amounts: Map<DayPart, Double> = emptyMap(),
+    val amounts: Map<String, Double> = emptyMap(),
     val perPart: Boolean = false,
     val daysMask: Int = MON_WED_FRI,
     val everyDays: Int = 2,
@@ -119,9 +125,11 @@ internal data class Draft(
 ) : Parcelable {
     val hasName: Boolean get() = name.isNotBlank()
 
-    /** A schedule needs a part of the day, and "some days" needs a day. Taking it only when needed needs neither. */
+    val timeCount: Int get() = if (custom) customMinutes.size else parts.size
+
+    /** A schedule needs a slot, and "some days" needs a day. Taking it only when needed needs neither. */
     val hasSchedule: Boolean
-        get() = frequency == Frequency.AS_NEEDED || (parts.isNotEmpty() && (frequency != Frequency.SOME_DAYS || daysMask != 0))
+        get() = frequency == Frequency.AS_NEEDED || (timeCount > 0 && (frequency != Frequency.SOME_DAYS || daysMask != 0))
 
     /** The name with its strength, such as "Metformin 500 mg". */
     fun label(): String =
@@ -134,9 +142,11 @@ internal data class Draft(
     /** Someone who tapped "Keep track" wants it on, counted or timed the way adding would choose for this unit. */
     fun trackingSupply(): Draft = if (supplyMode == SupplyMode.NONE) copy(supplyMode = usualSupply(unit)) else this
 
-    fun amount(part: DayPart): Double = if (perPart) amounts[part] ?: eachTime else eachTime
+    fun times(): List<DoseSlot> = if (custom) customMinutes.sorted().map(::CustomTime) else DayPart.entries.filter { it in parts }
 
-    fun slots(): Map<DayPart, Double> = if (frequency == Frequency.AS_NEEDED) emptyMap() else parts.associateWith(::amount)
+    fun amount(part: DoseSlot): Double = if (perPart && timeCount > 1) amounts[part.key] ?: eachTime else eachTime
+
+    fun slots(): Map<DoseSlot, Double> = if (frequency == Frequency.AS_NEEDED) emptyMap() else times().associateWith(::amount)
 
     /** Picking what it is also picks what a dose is counted in, until the person chooses a unit themselves. */
     fun withKind(kind: MedKind): Draft = copy(kind = kind).counting(if (unitChosen) unit else kind.defaultUnit)
@@ -217,6 +227,11 @@ internal data class Draft(
         fun from(med: MedicineWithSlots): Draft {
             val m = med.medicine
             val amounts = med.amounts
+            val customMinutes =
+                amounts.keys
+                    .filterIsInstance<CustomTime>()
+                    .map { it.minutes }
+                    .toSet()
             val first = amounts.values.firstOrNull() ?: 1.0
             return Draft(
                 base = m,
@@ -232,9 +247,15 @@ internal data class Draft(
                 color1 = m.color1,
                 color2 = m.color2,
                 frequency = m.frequency,
-                parts = amounts.keys.ifEmpty { setOf(DayPart.MORNING) },
+                parts =
+                    amounts.keys
+                        .filterIsInstance<DayPart>()
+                        .toSet()
+                        .ifEmpty { setOf(DayPart.MORNING) },
+                custom = customMinutes.isNotEmpty(),
+                customMinutes = customMinutes,
                 eachTime = first,
-                amounts = amounts,
+                amounts = amounts.mapKeys { it.key.key },
                 perPart = amounts.values.toSet().size > 1,
                 daysMask = if (m.frequency == Frequency.SOME_DAYS) m.daysMask else MON_WED_FRI,
                 everyDays = m.everyDays,
@@ -265,10 +286,38 @@ internal fun AddFlow(
     var current by rememberSaveable { mutableStateOf(Draft()) }
     var step by rememberSaveable { mutableIntStateOf(1) }
     var confirmLeave by rememberSaveable { mutableStateOf(false) }
+    var past by rememberSaveable { mutableStateOf<List<PastDoseDraft>>(emptyList()) }
+    var pastStart by rememberSaveable { mutableStateOf<PastScheduleStart?>(null) }
+    var enteringPastDose by rememberSaveable { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saveProblem by rememberSaveable { mutableStateOf<String?>(null) }
     // Leaving only asks first when something would be lost.
     val leave = { if (current != Draft()) confirmLeave = true else onCancel() }
-    BackHandler { if (step > 1) step-- else leave() }
+    val back: () -> Unit = {
+        if (!saving) {
+            when {
+                enteringPastDose -> enteringPastDose = false
+                step > 1 -> step--
+                else -> leave()
+            }
+        }
+    }
+    BackHandler(onBack = back)
     val today = app.repository.today()
+    val clock = app.settings.value.clock
+    val zone = ZoneId.systemDefault()
+    val scheduledPast =
+        remember(pastStart, current, today, clock, zone) {
+            pastStart?.doses(current.plan(today), clock, zone).orEmpty()
+        }
+    val changeDraft: (Draft) -> Unit = { next ->
+        if (pastStart != null &&
+            (current.plan(today) != next.plan(today) || current.unit != next.unit || current.customUnit != next.customUnit)
+        ) {
+            pastStart = null
+        }
+        current = next
+    }
 
     Column(modifier.fillMaxSize().imePadding()) {
         Row(
@@ -278,10 +327,10 @@ internal fun AddFlow(
             if (step == 1) {
                 IconCircleButton(RexiIcons.Close, "Cancel", leave)
             } else {
-                IconCircleButton(RexiIcons.Back, "Back", { step-- })
+                IconCircleButton(RexiIcons.Back, "Back", back)
             }
             Spacer(Modifier.weight(1f))
-            StepBar(step, STEPS)
+            if (step <= STEPS) StepBar(step, STEPS)
         }
         AnimatedContent(
             targetState = step,
@@ -304,25 +353,64 @@ internal fun AddFlow(
                     1 -> {
                         StepTitle("What are you adding?")
                         Spacer(Modifier.height(22.dp))
-                        WhatStep(current) { current = it }
+                        WhatStep(current, onChange = changeDraft)
                     }
 
                     2 -> {
                         StepTitle(LOOK_TITLE, subtitle = LOOK_SUBTITLE)
                         Spacer(Modifier.height(18.dp))
-                        LookStep(current) { current = it }
+                        LookStep(current, onChange = changeDraft)
                     }
 
                     3 -> {
                         StepTitle(WHEN_TITLE, subtitle = current.label())
                         Spacer(Modifier.height(20.dp))
-                        WhenStep(current, today, app.settings.value.partMinutes, rememberUse24h()) { current = it }
+                        WhenStep(current, today, clock.partMinutes, rememberUse24h(), changeDraft)
+                    }
+
+                    4 -> {
+                        StepTitle(SUPPLY_TITLE, subtitle = SUPPLY_SUBTITLE)
+                        Spacer(Modifier.height(18.dp))
+                        SupplyStep(current, today, pastStart?.date) { current = it }
                     }
 
                     else -> {
-                        StepTitle(SUPPLY_TITLE, subtitle = SUPPLY_SUBTITLE)
-                        Spacer(Modifier.height(18.dp))
-                        SupplyStep(current, today) { current = it }
+                        if (current.frequency == Frequency.AS_NEEDED) {
+                            StepTitle("Log past doses", subtitle = "Optional. Add doses you took today or in the past 30 days.")
+                            Spacer(Modifier.height(18.dp))
+                            AsNeededPastDoseStep(
+                                draft = current,
+                                repository = app.repository,
+                                entries = past,
+                                editing = enteringPastDose,
+                                onEdit = { enteringPastDose = it },
+                                onAdd = { past = past + it },
+                                onRemove = { past = past - it },
+                            )
+                        } else {
+                            StepTitle("When did you start?", subtitle = "Choose the date and scheduled time of your first dose.")
+                            Spacer(Modifier.height(18.dp))
+                            PastScheduleStep(
+                                draft = current,
+                                clock = clock,
+                                confirmed = pastStart,
+                                onConfirm = {
+                                    pastStart = it
+                                    past = emptyList()
+                                    step = STEPS
+                                },
+                                onClear =
+                                    if (pastStart != null || past.isNotEmpty()) {
+                                        {
+                                            pastStart = null
+                                            past = emptyList()
+                                            step = STEPS
+                                        }
+                                    } else {
+                                        null
+                                    },
+                            )
+                        }
                     }
                 }
             }
@@ -333,15 +421,51 @@ internal fun AddFlow(
                 3 -> current.hasSchedule
                 else -> true
             }
-        Box(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp, top = 8.dp)) {
+        Column(
+            Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp, top = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (step < STEPS) {
                 PrimaryButton("Continue", { step++ }, enabled = ready, modifier = Modifier.fillMaxWidth())
-            } else {
+            } else if (step == STEPS) {
+                if (!saving) {
+                    val count = scheduledPast.size + past.size
+                    val label = if (count == 0) "Log past doses" else "Past doses ($count)"
+                    SoftButton(label, { step = PAST_DOSES_STEP }, modifier = Modifier.fillMaxWidth(), height = 48.dp)
+                }
                 PrimaryButton(
                     "Save ${current.name.trim()}",
-                    { scope.launch { onSave(app.repository.save(current.toMedicine(today), current.slots())) } },
+                    {
+                        if (!saving) {
+                            saving = true
+                            val draft = current
+                            val slots = draft.slots()
+                            val start = pastStart
+                            val doses = if (start == null) past.map { it.toDose(slots.keys) } else scheduledPast
+                            val medicine = draft.toMedicine(today)
+                            scope.launch {
+                                try {
+                                    onSave(
+                                        app.repository.save(
+                                            if (start == null) medicine else medicine.copy(startDay = start.day),
+                                            slots,
+                                            doses,
+                                            pastDosesThrough = start?.through,
+                                        ),
+                                    )
+                                } catch (_: IllegalArgumentException) {
+                                    saveProblem = "Check the dates, times and scheduled doses in your past entries."
+                                } finally {
+                                    saving = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !saving,
                     modifier = Modifier.fillMaxWidth(),
                 )
+            } else if (current.frequency == Frequency.AS_NEEDED) {
+                PrimaryButton("Done", back, enabled = !enteringPastDose, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -355,6 +479,7 @@ internal fun AddFlow(
             danger = true,
         )
     }
+    saveProblem?.let { MessageDialog("Check past doses", it) { saveProblem = null } }
 }
 
 /**
@@ -713,42 +838,14 @@ private fun ColumnScope.WhenStep(
             color = palette.muted,
         )
     } else {
-        FieldLabel("Parts of the day")
+        FieldLabel("Dose times")
         Spacer(Modifier.height(10.dp))
-        DayPart.entries.chunked(2).forEach { pair ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                pair.forEach { part ->
-                    val on = part in draft.parts
-                    val tint = palette.tint(part)
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .height(84.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(if (on) tint.background else palette.surface)
-                            .toggleable(value = on, role = Role.Checkbox) {
-                                onChange(draft.copy(parts = if (on) draft.parts - part else draft.parts + part))
-                            }.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                part.label,
-                                style = Type.body,
-                                color = if (on) tint.label else palette.muted,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (on) Icon(RexiIcons.Check, contentDescription = null, tint = tint.ink, modifier = Modifier.size(20.dp))
-                        }
-                        Text(
-                            Format.time(partMinutes[part] ?: part.defaultMinutes, use24),
-                            style = Type.time,
-                            color = if (on) tint.ink else palette.faint,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
+        Segmented(listOf("Parts of day", "Custom times"), if (draft.custom) 1 else 0, { onChange(draft.copy(custom = it == 1)) })
+        Spacer(Modifier.height(10.dp))
+        if (draft.custom) {
+            CustomTimes(draft, use24, onChange)
+        } else {
+            PresetTimes(draft, partMinutes, use24, onChange)
         }
         when (draft.frequency) {
             Frequency.SOME_DAYS -> {
@@ -812,7 +909,7 @@ private fun ColumnScope.WhenStep(
         }
         Spacer(Modifier.height(6.dp))
         Panel(padding = 0.dp) {
-            if (!draft.perPart || draft.parts.size < 2) {
+            if (!draft.perPart || draft.timeCount < 2) {
                 StepperRow(
                     label = "Each time",
                     value = draft.unitAmount(draft.eachTime),
@@ -820,26 +917,32 @@ private fun ColumnScope.WhenStep(
                     onPlus = { onChange(draft.copy(eachTime = draft.stepped(draft.eachTime, 1))) },
                 )
             } else {
-                DayPart.entries.filter { it in draft.parts }.forEachIndexed { index, part ->
+                draft.times().forEachIndexed { index, part ->
                     if (index > 0) RowLine()
                     val value = draft.amount(part)
                     StepperRow(
-                        label = part.label,
+                        label = part.label(use24),
                         value = draft.unitAmount(value),
-                        onMinus = { onChange(draft.copy(amounts = draft.amounts + (part to draft.stepped(value, -1)))) },
-                        onPlus = { onChange(draft.copy(amounts = draft.amounts + (part to draft.stepped(value, 1)))) },
+                        onMinus = { onChange(draft.copy(amounts = draft.amounts + (part.key to draft.stepped(value, -1)))) },
+                        onPlus = { onChange(draft.copy(amounts = draft.amounts + (part.key to draft.stepped(value, 1)))) },
                     )
                 }
             }
         }
-        if (draft.parts.size > 1) {
+        if (draft.timeCount > 1) {
             TextAction(
                 if (draft.perPart) "Same amount every time" else "Different amounts at different times",
                 {
                     onChange(
                         draft.copy(
                             perPart = !draft.perPart,
-                            amounts = if (draft.perPart) draft.amounts else draft.parts.associateWith { draft.eachTime },
+                            amounts =
+                                if (draft.perPart) {
+                                    draft.amounts
+                                } else {
+                                    draft.amounts +
+                                        draft.times().associate { it.key to draft.eachTime }
+                                },
                         ),
                     )
                 },
@@ -852,6 +955,160 @@ private fun ColumnScope.WhenStep(
     Spacer(Modifier.height(10.dp))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Food.entries.forEach { food -> Chip(food.label, draft.food == food, { onChange(draft.copy(food = food)) }) }
+    }
+}
+
+@Composable
+private fun PresetTimes(
+    draft: Draft,
+    partMinutes: Map<DayPart, Int>,
+    use24: Boolean,
+    onChange: (Draft) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalPalette.current
+    Column(modifier) {
+        DayPart.entries.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pair.forEach { part ->
+                    val on = part in draft.parts
+                    val tint = palette.tint(part)
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .height(84.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(if (on) tint.background else palette.surface)
+                            .toggleable(value = on, role = Role.Checkbox) {
+                                onChange(draft.copy(parts = if (on) draft.parts - part else draft.parts + part))
+                            }.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                part.label,
+                                style = Type.body,
+                                color = if (on) tint.label else palette.muted,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (on) Icon(RexiIcons.Check, contentDescription = null, tint = tint.ink, modifier = Modifier.size(20.dp))
+                        }
+                        Text(
+                            Format.time(partMinutes[part] ?: part.defaultMinutes, use24),
+                            style = Type.time,
+                            color = if (on) tint.ink else palette.faint,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun CustomTimes(
+    draft: Draft,
+    use24: Boolean,
+    onChange: (Draft) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalPalette.current
+    var picking by rememberSaveable { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf<Int?>(null) }
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val times = draft.customMinutes.sorted()
+        times.forEachIndexed { index, minutes ->
+            CustomTimeCard(
+                time = Format.time(minutes, use24),
+                tint = palette.tint(DayPart.entries[index % DayPart.entries.size]),
+                onEdit = {
+                    editing = minutes
+                    picking = true
+                },
+                onRemove = {
+                    onChange(
+                        draft.copy(
+                            customMinutes = draft.customMinutes - minutes,
+                            amounts = draft.amounts - CustomTime(minutes).key,
+                        ),
+                    )
+                },
+            )
+        }
+        if (times.size < CustomTime.MINUTES_PER_DAY) {
+            PrimaryButton(
+                text = "Add a time",
+                onClick = {
+                    editing = null
+                    picking = true
+                },
+                modifier = Modifier.fillMaxWidth().border(1.5.dp, palette.outline, CircleShape),
+                icon = RexiIcons.Plus,
+                height = 52.dp,
+                container = palette.surface,
+                content = palette.ink,
+            )
+        }
+    }
+    if (picking) {
+        val original = editing
+        TimeDialog(
+            title = if (original == null) "Add a dose time" else "Change dose time",
+            minutes = original ?: draft.customMinutes.maxOrNull() ?: DayPart.MORNING.defaultMinutes,
+            onPick = { minutes ->
+                val previousTime = original?.let(::CustomTime)
+                val newTime = CustomTime(minutes)
+                val amounts =
+                    if (previousTime == null) {
+                        draft.amounts
+                    } else {
+                        draft.amounts - previousTime.key + (newTime.key to draft.amount(previousTime))
+                    }
+                val remaining = if (original == null) draft.customMinutes else draft.customMinutes - original
+                onChange(draft.copy(customMinutes = remaining + minutes, amounts = amounts))
+                picking = false
+            },
+            onDismiss = { picking = false },
+            validate = { if (it != original && it in draft.customMinutes) "You already added this time." else null },
+        )
+    }
+}
+
+@Composable
+private fun CustomTimeCard(
+    time: String,
+    tint: Tint,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(tint.background)
+            .padding(end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .heightIn(min = 72.dp)
+                .clickable(role = Role.Button, onClickLabel = "Change time", onClick = onEdit)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text(time, style = Type.time, color = tint.ink)
+        }
+        IconCircleButton(
+            RexiIcons.Close,
+            "Remove $time",
+            onRemove,
+            size = 48.dp,
+            background = tint.ink.copy(alpha = 0.10f),
+            tint = tint.ink,
+        )
     }
 }
 
@@ -937,10 +1194,12 @@ private fun StepperRow(
 private fun ColumnScope.SupplyStep(
     draft: Draft,
     today: LocalDate,
+    pastStart: LocalDate? = null,
     onChange: (Draft) -> Unit,
 ) {
     val palette = LocalPalette.current
     var typing by rememberSaveable { mutableStateOf(false) }
+    val use24 = rememberUse24h()
     val modes = listOf(SupplyMode.COUNT, SupplyMode.DURATION, SupplyMode.NONE)
     Segmented(
         listOf("Count it", "Time it", "Off"),
@@ -1042,6 +1301,9 @@ private fun ColumnScope.SupplyStep(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (draft.frequency == Frequency.AS_NEEDED) {
                         SoftTag("When needed")
+                    } else if (draft.custom) {
+                        draft.times().take(3).forEach { SoftTag(it.label(use24)) }
+                        if (draft.timeCount > 3) SoftTag("+${draft.timeCount - 3} more")
                     } else {
                         DayPart.entries.filter { it in draft.parts }.forEach { PartTag(it) }
                     }
@@ -1051,7 +1313,7 @@ private fun ColumnScope.SupplyStep(
         Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
         Spacer(Modifier.height(12.dp))
-        Text(summary(draft, today), style = Type.small, color = palette.muted)
+        Text(summary(draft, today, pastStart), style = Type.small, color = palette.muted)
     }
     if (typing) {
         NumberDialog(
@@ -1070,14 +1332,16 @@ private fun ColumnScope.SupplyStep(
 private fun summary(
     draft: Draft,
     today: LocalDate,
+    pastStart: LocalDate?,
 ): String {
+    val plan = draft.plan(today).let { if (pastStart == null) it else it.copy(startDay = pastStart) }
     val schedule =
         if (draft.frequency == Frequency.AS_NEEDED) {
-            "Only when needed."
+            if (draft.food == Food.ANY) "Only when needed." else "Only when needed, ${draft.food.label.lowercase()}."
         } else {
             val amount =
                 if (draft.perPart &&
-                    draft.parts.size > 1
+                    draft.timeCount > 1
                 ) {
                     "Different amounts"
                 } else {
@@ -1095,19 +1359,25 @@ private fun summary(
                     }
 
                     Frequency.EVERY_FEW_DAYS -> {
-                        val next = Schedule.nextDue(draft.plan(today), today)
+                        val next = Schedule.nextDue(plan, today)
                         Format.everyDays(draft.everyDays) + next?.let { ", next dose ${dayWord(it, today)}" }.orEmpty()
                     }
 
                     Frequency.COURSE -> {
-                        "For ${draft.courseDays} days"
+                        if (pastStart == null) {
+                            "For ${draft.courseDays} days"
+                        } else {
+                            val end = Schedule.courseEnd(plan)
+                            "${if (end < today) "Ended" else "Ends"} ${Format.day(end)}"
+                        }
                     }
 
                     Frequency.AS_NEEDED -> {
                         ""
                     }
                 }
-            "$amount ${Format.inParts(draft.parts)}$food. $often."
+            val times = if (draft.custom) "at your chosen times" else Format.inParts(draft.parts)
+            "$amount $times$food. $often."
         }
     val supply =
         when (draft.supplyMode) {
@@ -1116,7 +1386,7 @@ private fun summary(
             }
 
             SupplyMode.COUNT -> {
-                val info = Supply.counted(draft.supplyCount, Schedule.dailyUse(draft.plan(today)), today, draft.refillLeadDays)
+                val info = Supply.counted(draft.supplyCount, Schedule.dailyUse(plan), today, draft.refillLeadDays)
                 val runOut = info.runOut
                 val remind = info.remindOn
                 if (runOut == null || remind == null) {
@@ -1138,6 +1408,7 @@ private fun summary(
 }
 
 private const val STEPS = 4
+private const val PAST_DOSES_STEP = STEPS + 1
 
 // The add flow's step titles, which the edit page uses as its section headings.
 private const val LOOK_TITLE = "What is it?"

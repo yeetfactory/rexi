@@ -1,6 +1,6 @@
 # Rexi
 
-A calm medication tracker for Android. Your day is a pillbox with four compartments, Morning, Afternoon, Evening and Night, and Rexi makes sure each one gets answered.
+A calm medication tracker for Android. Plan doses around Morning, Afternoon, Evening and Night, or pick your own times.
 
 Everything stays on your phone. There's no account, and the app can't reach the internet.
 
@@ -12,9 +12,10 @@ Everything stays on your phone. There's no account, and the app can't reach the 
 ## What it does
 
 - **Any kind of medicine.** Tablets, capsules, liquids, drops, sprays, inhalers, injections, creams and patches, each with its own drawing and colour so you can tell them apart. Anything else goes under Other, and you can count doses in a word of your own.
-- **Reminders that don't give up.** A reminder rings at the time you set for each part of the day, and again every 10 minutes until you answer. It can show over the lock screen like an alarm, and quiet hours keep the night silent.
+- **Reminders that don't give up.** A reminder rings at each scheduled time, and again every 10 minutes until you answer. It can show over the lock screen like an alarm, and quiet hours keep the night silent.
 - **Answer from anywhere.** Take, snooze or skip from Today, from the notification, from the full screen reminder, or from the home screen widget.
 - **Missed doses, and late ones.** A dose nobody answered is marked as missed after a few hours. If you took it after all, say when.
+- **Past doses.** When adding a medicine you already take, choose the date and scheduled time of your first dose, up to 30 days ago. Confirm the doses you took in one step.
 - **Never run out.** Count what's left, or just say how long a bottle lasts. Rexi warns you a few days or a week ahead.
 - **When needed.** For medicines like ibuprofen, set a gap between doses and a daily limit. Rexi warns you if it's too soon and offers to remind you when it's fine.
 - **Short courses.** Antibiotics and other courses show which day you're on and stop by themselves.

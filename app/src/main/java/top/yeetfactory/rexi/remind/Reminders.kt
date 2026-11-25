@@ -8,14 +8,18 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import top.yeetfactory.rexi.RexiApp
+import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.Format
+import top.yeetfactory.rexi.core.PartView
 import top.yeetfactory.rexi.core.Schedule
 import top.yeetfactory.rexi.core.Supply
 import top.yeetfactory.rexi.core.SupplyMode
 import top.yeetfactory.rexi.data.MedicineWithSlots
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -49,6 +53,7 @@ class Reminders(
             val today = repository.today()
             val values = settings.value
             val medicines = repository.dao.medicines()
+            val byId = medicines.associateBy { it.id }
             val plans = medicines.map { it.plan() }
             val logs =
                 repository.dao
@@ -67,6 +72,7 @@ class Reminders(
                 }
             }
 
+            var customWake = Long.MAX_VALUE
             for (offset in -1..1) {
                 val date = today.plusDays(offset.toLong())
                 val view = DayBook.build(date, plans, logs, nowLocal, values.clock)
@@ -90,6 +96,15 @@ class Reminders(
                     }
                     set(missCode, missAt, RexiReceiver.ACTION_MISS) { putDayPart(date, part) }
                 }
+                view.parts.filter { it.part is CustomTime && it.pending.isNotEmpty() }.forEach { compartment ->
+                    customWake = minOf(customWake, checkCustom(date, compartment, now, zone, byId))
+                }
+            }
+            // One rolling alarm lets every custom time work without hitting Android's per-app alarm limit.
+            if (customWake == Long.MAX_VALUE) {
+                cancel(CUSTOM_WAKE_CODE, RexiReceiver.ACTION_MISS)
+            } else {
+                set(CUSTOM_WAKE_CODE, customWake, RexiReceiver.ACTION_MISS) {}
             }
 
             settings.asNeededReminders().forEach { (medId, at) ->
@@ -125,9 +140,48 @@ class Reminders(
         return if (values.isQuiet(Format.minutesOfDay(next, zone))) null else next
     }
 
+    private fun checkCustom(
+        date: LocalDate,
+        compartment: PartView,
+        now: Long,
+        zone: ZoneId,
+        medicines: Map<Long, MedicineWithSlots>,
+    ): Long {
+        val settings = app.settings
+        val values = settings.value
+        val part = compartment.part
+        val dueAt = millis(values.clock.dueAt(date, part), zone)
+        val missAt = millis(values.clock.missedAt(date, part), zone)
+        val rang = settings.rangAt(date, part)
+        val snoozed = settings.snoozedUntil(date, part)
+        if (now >= missAt) return Long.MAX_VALUE
+        val repeatAfter = REPEAT_MS.takeIf { values.repeatUntilAnswered }
+        val ringAt = Schedule.customRingAt(dueAt, rang, snoozed, repeatAfter) ?: return missAt
+        if (ringAt > now) return minOf(ringAt, missAt)
+
+        val quiet = values.isQuiet(Format.minutesOfDay(now, zone))
+        if (quiet && rang >= dueAt && snoozed <= rang) {
+            val local = LocalDateTime.ofInstant(Instant.ofEpochMilli(now), zone)
+            val end = local.toLocalDate().atStartOfDay().plusMinutes(values.quietEnd.toLong())
+            val endAt = millis(if (end <= local) end.plusDays(1) else end, zone)
+            return minOf(missAt, if (endAt > now) endAt else now + REPEAT_MS)
+        }
+        settings.setRang(date, part, now)
+        app.notifier.showDose(
+            date,
+            part,
+            compartment.pending.mapNotNull { dose ->
+                medicines[dose.medId]?.let { it to dose.amount }
+            },
+            dueAt,
+            quiet,
+        )
+        return repeatAfter?.let { minOf(missAt, now + it) } ?: missAt
+    }
+
     private suspend fun markMissed(
         date: LocalDate,
-        part: DayPart,
+        part: DoseSlot,
         doses: List<Pair<Long, Double>>,
         medicines: List<MedicineWithSlots>,
         notify: Boolean,
@@ -209,6 +263,7 @@ class Reminders(
         private const val REMIND_BASE = 1_000
         private const val MISS_BASE = 2_000
         private const val REFILL_CODE = 3_000
+        private const val CUSTOM_WAKE_CODE = 4_000
         private const val AS_NEEDED_BASE = 1_000_000
 
         fun supply(
@@ -232,10 +287,10 @@ class Reminders(
 
 fun Intent.putDayPart(
     day: LocalDate,
-    part: DayPart,
-): Intent = putExtra(RexiReceiver.EXTRA_DAY, day.toEpochDay()).putExtra(RexiReceiver.EXTRA_PART, part.name)
+    part: DoseSlot,
+): Intent = putExtra(RexiReceiver.EXTRA_DAY, day.toEpochDay()).putExtra(RexiReceiver.EXTRA_PART, part.key)
 
 fun Intent.dayExtra(): LocalDate? =
     if (hasExtra(RexiReceiver.EXTRA_DAY)) LocalDate.ofEpochDay(getLongExtra(RexiReceiver.EXTRA_DAY, 0)) else null
 
-fun Intent.partExtra(): DayPart? = getStringExtra(RexiReceiver.EXTRA_PART)?.let { name -> DayPart.entries.firstOrNull { it.name == name } }
+fun Intent.partExtra(): DoseSlot? = getStringExtra(RexiReceiver.EXTRA_PART)?.let(DoseSlot::fromKey)

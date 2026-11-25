@@ -1,6 +1,7 @@
 package top.yeetfactory.rexi.data
 
 import android.os.Parcelable
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
@@ -8,7 +9,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
 import kotlinx.parcelize.Parcelize
-import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.DoseUnit
 import top.yeetfactory.rexi.core.Food
@@ -89,11 +90,11 @@ data class Medicine(
 )
 data class Slot(
     val medicineId: Long,
-    val part: DayPart,
+    val part: DoseSlot,
     val amount: Double,
 )
 
-/** One answered dose. Scheduled doses have a part; as-needed doses don't, and there can be any number of them. */
+/** One answered dose. A part identifies a scheduled dose; unscheduled logs can occur any number of times. */
 @Entity(
     tableName = "dose_log",
     foreignKeys = [
@@ -105,13 +106,15 @@ data class DoseLog(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val medicineId: Long,
     val day: Long,
-    val part: DayPart?,
+    val part: DoseSlot?,
     val status: DoseStatus,
     val at: Long,
     val amount: Double,
     val reason: String = "",
+    /** The current supply count was entered after this dose was taken. */
+    @ColumnInfo(defaultValue = "0") val historical: Boolean = false,
 ) {
-    fun logged(): Logged = Logged(medicineId, LocalDate.ofEpochDay(day), part, status, at, amount, reason)
+    fun logged(): Logged = Logged(medicineId, LocalDate.ofEpochDay(day), part, status, at, amount, reason, historical)
 }
 
 data class MedicineWithSlots(
@@ -120,7 +123,7 @@ data class MedicineWithSlots(
 ) {
     val id: Long get() = medicine.id
 
-    val amounts: Map<DayPart, Double> get() = slots.associate { it.part to it.amount }
+    val amounts: Map<DoseSlot, Double> get() = slots.associate { it.part to it.amount }
 
     val asNeeded: Boolean get() = medicine.frequency == Frequency.AS_NEEDED
 
