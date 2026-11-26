@@ -4,8 +4,9 @@ import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayView
 import top.yeetfactory.rexi.core.DoseSlot
-import top.yeetfactory.rexi.core.DoseState
+import top.yeetfactory.rexi.core.DoseView
 import top.yeetfactory.rexi.data.MedicineWithSlots
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -39,7 +40,6 @@ class DoseActions(
         part: DoseSlot,
         at: Long = repository.now(),
         only: Set<Long>? = null,
-        includeMissed: Boolean = false,
     ): List<MedicineWithSlots> {
         val book = book(day)
         val doses =
@@ -47,7 +47,7 @@ class DoseActions(
                 .part(part)
                 ?.doses
                 .orEmpty()
-                .filter { it.pending || (includeMissed && it.state == DoseState.MISSED) }
+                .filter { it.pending }
                 .filter { only == null || it.medId in only }
         doses.forEach { repository.take(it.medId, day, part, at, it.amount) }
         settle(day, part)
@@ -100,13 +100,69 @@ class DoseActions(
         return until
     }
 
+    /**
+     * Takes back a dose that was ticked by mistake. Before its time runs out it waits for an answer again. After that,
+     * it's written down as not taken straight away, so the reminder engine doesn't announce a miss the person just
+     * told it about.
+     */
     suspend fun undo(
         day: LocalDate,
         part: DoseSlot,
         medIds: Collection<Long>,
     ) {
-        medIds.forEach { repository.undo(it, day, part) }
+        val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(repository.now()), ZoneId.systemDefault())
+        if (!app.settings.value.clock
+                .isOverdue(day, part, now)
+        ) {
+            medIds.forEach { repository.undo(it, day, part) }
+            return
+        }
+        notTaken(day, part, medIds)
     }
+
+    /** Answers chosen doses as taken at [at], whatever they were before: for logging a dose late, on any day. */
+    suspend fun takeAt(
+        day: LocalDate,
+        part: DoseSlot,
+        medIds: Collection<Long>,
+        at: Long,
+    ) {
+        chosen(day, part, medIds).forEach { repository.take(it.medId, day, part, at, it.amount) }
+        settle(day, part)
+    }
+
+    /** Answers chosen doses as skipped, whatever they were before. */
+    suspend fun skipThese(
+        day: LocalDate,
+        part: DoseSlot,
+        medIds: Collection<Long>,
+        reason: String = "",
+    ) {
+        chosen(day, part, medIds).forEach { repository.skip(it.medId, day, part, it.amount, reason) }
+        settle(day, part)
+    }
+
+    /** Answers chosen doses as not taken, whatever they were before. */
+    suspend fun notTaken(
+        day: LocalDate,
+        part: DoseSlot,
+        medIds: Collection<Long>,
+    ) {
+        chosen(day, part, medIds).forEach { repository.notTaken(it.medId, day, part, it.amount) }
+        settle(day, part)
+    }
+
+    private suspend fun chosen(
+        day: LocalDate,
+        part: DoseSlot,
+        medIds: Collection<Long>,
+    ): List<DoseView> =
+        book(day)
+            .view
+            .part(part)
+            ?.doses
+            .orEmpty()
+            .filter { it.medId in medIds }
 
     private fun settle(
         day: LocalDate,

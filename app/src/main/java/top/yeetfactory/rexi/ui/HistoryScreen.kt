@@ -2,6 +2,7 @@ package top.yeetfactory.rexi.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import top.yeetfactory.rexi.core.CellState
 import top.yeetfactory.rexi.core.CustomTime
 import top.yeetfactory.rexi.core.DayBook
 import top.yeetfactory.rexi.core.DayPart
+import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
 import top.yeetfactory.rexi.core.Format
 import top.yeetfactory.rexi.core.History
@@ -63,6 +65,8 @@ import java.util.Locale
 @Composable
 internal fun HistoryScreen(
     app: RexiApp,
+    onFix: (LocalDate, DoseSlot, Long) -> Unit,
+    onLogDose: (Long, LocalDate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
@@ -157,13 +161,21 @@ internal fun HistoryScreen(
             Legend()
             Spacer(Modifier.height(12.dp))
             val day = LocalDate.ofEpochDay(selectedDay).let { if (it in dates) it else dates.first() }
+            val unscheduled = logs.filter { it.part == null && it.day == day.toEpochDay() }
             DayDetail(
                 date = day,
                 today = today,
                 parts = views[day]?.parts.orEmpty(),
-                unscheduled = logs.filter { it.part == null && it.day == day.toEpochDay() },
+                unscheduled = unscheduled,
+                asNeeded =
+                    medicines.filter { med ->
+                        val started = med.medicine.startDay <= day.toEpochDay()
+                        med.asNeeded && (unscheduled.any { it.medicineId == med.id } || (!med.medicine.archived && started && day <= today))
+                    },
                 medicines = byId,
                 use24 = use24,
+                onFix = { part, medId -> onFix(day, part, medId) },
+                onLogDose = { medId -> onLogDose(medId, day) },
             )
         }
     }
@@ -316,8 +328,11 @@ private fun DayDetail(
     today: LocalDate,
     parts: List<PartView>,
     unscheduled: List<DoseLog>,
+    asNeeded: List<MedicineWithSlots>,
     medicines: Map<Long, MedicineWithSlots>,
     use24: Boolean,
+    onFix: (DoseSlot, Long) -> Unit,
+    onLogDose: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
@@ -326,6 +341,7 @@ private fun DayDetail(
     val pastUnscheduled = unscheduled.count { it.historical }
     val taken = doses.count { it.state == DoseState.TAKEN } + pastUnscheduled
     val resolved = doses.count { !it.pending } + pastUnscheduled
+    val editable = date <= today
     Column(
         modifier
             .fillMaxWidth()
@@ -352,19 +368,37 @@ private fun DayDetail(
         }
         parts.forEach { part ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
-            PartLine(part, medicines, use24, zone)
+            PartLine(part, medicines, use24, zone, editable, onFix = { medId -> onFix(part.part, medId) })
         }
-        unscheduled.groupBy { it.historical }.forEach { (past, entries) ->
+        val past = unscheduled.filter { it.historical && medicines[it.medicineId]?.asNeeded != true }
+        if (past.isNotEmpty()) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
             Column(Modifier.padding(vertical = 10.dp)) {
-                Text(if (past) "Past doses" else "As needed", style = Type.label, color = palette.muted)
+                Text("Past doses", style = Type.label, color = palette.muted)
                 Spacer(Modifier.height(4.dp))
-                entries.sortedBy { it.at }.forEach { log ->
+                past.sortedBy { it.at }.forEach { log ->
                     val medicine = medicines[log.medicineId]?.medicine
                     val name = medicine?.title ?: "A medicine"
-                    val amount = if (past && medicine != null) ", ${medicine.amount(log.amount)}" else ""
-                    val reason = if (log.reason.isNotBlank()) ", ${log.reason.lowercase()}" else ""
-                    Text("$name$amount at ${Format.time(log.at, zone, use24)}$reason", style = Type.text, color = palette.ink)
+                    val amount = if (medicine != null) ", ${medicine.amount(log.amount)}" else ""
+                    Text("$name$amount at ${Format.time(log.at, zone, use24)}", style = Type.text, color = palette.ink)
+                }
+            }
+        }
+        if (asNeeded.isNotEmpty()) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.well))
+            Column(Modifier.padding(vertical = 10.dp)) {
+                Text("As needed", style = Type.label, color = palette.muted)
+                asNeeded.forEach { med ->
+                    val entries = unscheduled.filter { it.medicineId == med.id }.sortedBy { it.at }
+                    val times =
+                        entries.joinToString("; ") { log ->
+                            Format.time(log.at, zone, use24) + if (log.reason.isNotBlank()) ", ${log.reason.lowercase()}" else ""
+                        }
+                    ChangeRow(
+                        title = med.medicine.title,
+                        detail = times.ifEmpty { "None logged" },
+                        onClick = if (editable) ({ onLogDose(med.id) }) else null,
+                    )
                 }
             }
         }
@@ -378,6 +412,8 @@ private fun PartLine(
     medicines: Map<Long, MedicineWithSlots>,
     use24: Boolean,
     zone: ZoneId,
+    editable: Boolean,
+    onFix: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalPalette.current
@@ -409,68 +445,77 @@ private fun PartLine(
                 Triple(RexiIcons.Check, "Taken ${part.takenAt?.let { Format.time(it, zone, use24) }.orEmpty()}", palette.muted)
             }
         }
-    val reason = part.doses.firstOrNull { it.reason.isNotBlank() }?.reason
-    Column(modifier.fillMaxWidth().padding(vertical = 10.dp).semantics(mergeDescendants = true) {}) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // Each dose says its own answer only when they differ; otherwise the line above already says it.
+    val mixed = states.distinct().size > 1
+    Column(modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
             Text(
                 part.part.label(use24),
                 style = Type.label,
-                color =
-                    if (part.part ==
-                        DayPart.NIGHT
-                    ) {
-                        palette.ink
-                    } else {
-                        tint.label
-                    },
+                color = if (part.part == DayPart.NIGHT) palette.ink else tint.label,
                 modifier = Modifier.weight(1f),
             )
             if (icon != null) Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(5.dp))
             Text(
                 status.trim(),
-                style =
-                    Type.label.copy(
-                        fontWeight =
-                            if (color ==
-                                palette.alert
-                            ) {
-                                Type.label.fontWeight
-                            } else {
-                                Type.text.fontWeight
-                            },
-                    ),
+                style = Type.label.copy(fontWeight = if (color == palette.alert) Type.label.fontWeight else Type.text.fontWeight),
                 color = color,
             )
         }
-        Spacer(Modifier.height(4.dp))
-        if (part.doses.any { it.historical }) {
-            part.doses.forEach { dose ->
-                val med = medicines[dose.medId]?.medicine ?: return@forEach
-                val time =
-                    if (dose.state == DoseState.TAKEN && dose.at != null) {
-                        " at ${Format.time(dose.at, zone, use24)}"
+        part.doses.forEach { dose ->
+            val med = medicines[dose.medId]?.medicine ?: return@forEach
+            val time = if (dose.state == DoseState.TAKEN && dose.at != null) " at ${Format.time(dose.at, zone, use24)}" else ""
+            val reason = if (dose.reason.isNotBlank()) ", ${dose.reason.lowercase()}" else ""
+            ChangeRow(
+                title = "${med.title}, ${med.amount(dose.amount)}",
+                detail =
+                    if (mixed) {
+                        doseStatus(
+                            dose.state,
+                        ) + time + reason
                     } else {
-                        ""
-                    }
-                Text("${med.title}, ${med.amount(dose.amount)}$time", style = Type.text, color = palette.ink)
-            }
-        } else {
-            Text(
-                part.doses.mapNotNull { medicines[it.medId]?.medicine?.title }.joinToString(", "),
-                style = Type.body.copy(fontSize = Type.text.fontSize),
-                color = palette.ink,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                        reason.removePrefix(", ").replaceFirstChar { it.uppercaseChar() }
+                    },
+                onClick = if (editable && History.canChange(dose)) ({ onFix(dose.medId) }) else null,
             )
         }
-        if (reason != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                reason.replaceFirstChar { it.uppercaseChar() },
-                style = Type.label.copy(fontWeight = Type.text.fontWeight),
-                color = palette.muted,
-            )
+    }
+}
+
+private fun doseStatus(state: DoseState): String =
+    when (state) {
+        DoseState.TAKEN -> "Taken"
+        DoseState.SKIPPED -> "Skipped"
+        DoseState.MISSED -> "Missed"
+        DoseState.DUE -> "Due now"
+        DoseState.LATER -> "Later"
+    }
+
+/** A medicine's line in a day. When it can be corrected, the whole line opens the sheet that does it. */
+@Composable
+private fun ChangeRow(
+    title: String,
+    detail: String,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalPalette.current
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = if (onClick != null) 48.dp else 0.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = "Change", onClick = onClick) else Modifier)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+            Text(title, style = Type.text, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (detail.isNotBlank()) Text(detail, style = Type.label.copy(fontWeight = Type.text.fontWeight), color = palette.muted)
+        }
+        if (onClick != null) {
+            Icon(RexiIcons.Forward, contentDescription = null, tint = palette.faint, modifier = Modifier.size(18.dp))
         }
     }
 }

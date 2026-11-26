@@ -14,12 +14,12 @@ Everything stays on your phone. There's no account, and the app can't reach the 
 - **Any kind of medicine.** Tablets, capsules, liquids, drops, sprays, inhalers, injections, creams and patches, each with its own drawing and colour so you can tell them apart. Anything else goes under Other, and you can count doses in a word of your own.
 - **Reminders that don't give up.** A reminder rings at each scheduled time, and again every 10 minutes until you answer. It can show over the lock screen like an alarm, and quiet hours keep the night silent.
 - **Answer from anywhere.** Take, snooze or skip from Today, from the notification, from the full screen reminder, or from the home screen widget.
-- **Missed doses, and late ones.** A dose nobody answered is marked as missed after a few hours. If you took it after all, say when.
+- **Missed doses, and late ones.** A dose nobody answered is marked as missed after a few hours. If you took it after all, say when, or that you skipped it.
 - **Past doses.** When adding a medicine you already take, choose the date and scheduled time of your first dose, up to 30 days ago. Confirm the doses you took in one step.
 - **Never run out.** Count what's left, or just say how long a bottle lasts. Rexi warns you a few days or a week ahead.
 - **When needed.** For medicines like ibuprofen, set a gap between doses and a daily limit. Rexi warns you if it's too soon and offers to remind you when it's fine.
 - **Short courses.** Antibiotics and other courses show which day you're on and stop by themselves.
-- **History and a report.** A week at a glance as a pillbox grid, and a PDF of the last 30 days to show your doctor.
+- **History and a report.** A week at a glance as a pillbox grid, and a PDF of the last 30 days to show your doctor. Tap any earlier dose to put the record right.
 - **Private.** An app lock with your fingerprint or PIN, and an option to hide medicine names in notifications.
 - **Yours.** Back up to a file and restore it on a new phone. Light, dark, or follow the system, and the clock follows your phone's 12 or 24 hour setting.
 

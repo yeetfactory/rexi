@@ -105,6 +105,13 @@ data class DayClock(
         date: LocalDate,
         part: DoseSlot,
     ): LocalDateTime = dueAt(date, part).plusMinutes(missedAfterMinutes.toLong())
+
+    /** Whether a dose nobody answered counts as missed by [now]. */
+    fun isOverdue(
+        date: LocalDate,
+        part: DoseSlot,
+        now: LocalDateTime,
+    ): Boolean = now >= missedAt(date, part)
 }
 
 object DayBook {
@@ -137,7 +144,7 @@ object DayBook {
                         val state =
                             when {
                                 log != null -> log.status.state
-                                now >= clock.missedAt(date, part) -> DoseState.MISSED
+                                clock.isOverdue(date, part, now) -> DoseState.MISSED
                                 now >= clock.dueAt(date, part) -> DoseState.DUE
                                 else -> DoseState.LATER
                             }
@@ -185,6 +192,9 @@ object History {
             else -> CellState.TAKEN
         }
     }
+
+    /** A dose can be corrected from History once its time has come, whatever its answer was. */
+    fun canChange(dose: DoseView): Boolean = dose.state != DoseState.LATER
 
     /** Monday of the week that holds [date]. */
     fun weekStart(date: LocalDate): LocalDate = date.minusDays((date.dayOfWeek.value - 1).toLong())

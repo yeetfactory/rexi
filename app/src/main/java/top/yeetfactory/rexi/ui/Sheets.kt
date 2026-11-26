@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,13 +44,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import top.yeetfactory.rexi.RexiApp
 import top.yeetfactory.rexi.core.AsNeeded
 import top.yeetfactory.rexi.core.DayPart
 import top.yeetfactory.rexi.core.DoseSlot
 import top.yeetfactory.rexi.core.DoseState
+import top.yeetfactory.rexi.core.DoseStatus
 import top.yeetfactory.rexi.core.Format
+import top.yeetfactory.rexi.core.History
 import top.yeetfactory.rexi.remind.DoseActions
 import java.time.Instant
 import java.time.LocalDate
@@ -77,13 +79,17 @@ private fun Handle(modifier: Modifier = Modifier) {
     )
 }
 
-/** The sheet for a medicine taken only when needed. It warns when it's too soon, and never stops anyone logging. */
+/**
+ * The sheet for a medicine taken only when needed. It warns when it's too soon, and never stops anyone logging. Given
+ * an earlier [day], it logs or removes that day's doses instead, and the warnings, which are about now, stay away.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AsNeededSheet(
     app: RexiApp,
     medId: Long,
     onDismiss: () -> Unit,
+    day: LocalDate? = null,
 ) {
     val palette = LocalPalette.current
     val scope = rememberCoroutineScope()
@@ -93,7 +99,16 @@ internal fun AsNeededSheet(
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val medicine by remember(medId) { app.repository.dao.watchMedicine(medId) }.collectAsStateWithLifecycle(null)
     val since = remember { System.currentTimeMillis() - 2 * DAY_MS }
-    val logs by remember(medId) { app.repository.dao.watchAsNeeded(medId, since) }.collectAsStateWithLifecycle(emptyList())
+    val earlier = day?.takeIf { it < Instant.ofEpochMilli(now).atZone(zone).toLocalDate() }
+    val logs by remember(medId, earlier) {
+        if (earlier == null) {
+            app.repository.dao.watchAsNeeded(medId, since)
+        } else {
+            app.repository.dao
+                .watchLogs(earlier.toEpochDay(), earlier.toEpochDay())
+                .map { all -> all.filter { it.medicineId == medId && it.part == null && it.status == DoseStatus.TAKEN } }
+        }
+    }.collectAsStateWithLifecycle(emptyList())
     var reason by remember { mutableStateOf<String?>(null) }
     var pickedMinutes by remember { mutableStateOf<Int?>(null) }
     var amount by remember { mutableDoubleStateOf(0.0) }
@@ -115,14 +130,19 @@ internal fun AsNeededSheet(
         val takenAt =
             pickedMinutes?.let { minutes ->
                 val picked =
-                    today
+                    (earlier ?: today)
                         .atStartOfDay(zone)
                         .plusMinutes(minutes.toLong())
                         .toInstant()
                         .toEpochMilli()
-                if (picked > now) picked - DAY_MS else picked
+                if (earlier == null && picked > now) picked - DAY_MS else picked
             } ?: now
         val nextAllowed = status.nextAllowedAt
+        // The warnings are about taking a dose now, so an earlier day doesn't show them.
+        val tooSoon = earlier == null && status.tooSoon
+        // On an earlier day there's no sensible default, so the person picks the time.
+        val needsTime = earlier != null && pickedMinutes == null
+        val limitReached = earlier == null && status.limitReached
         Column(
             Modifier
                 .fillMaxWidth()
@@ -144,36 +164,40 @@ internal fun AsNeededSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        listOf(m.strengthText, m.amount(m.asNeededAmount), "as needed").filter { it.isNotBlank() }.joinToString(", "),
+                        listOf(m.strengthText, m.amount(m.asNeededAmount), "as needed", earlier?.let(Format::day).orEmpty())
+                            .filter { it.isNotBlank() }
+                            .joinToString(", "),
                         style = Type.text,
                         color = palette.muted,
                     )
                 }
                 IconCircleButton(RexiIcons.Close, "Close", { close(scope, state, onDismiss) }, background = palette.well)
             }
-            Spacer(Modifier.height(18.dp))
-            Row(horizontalArrangement = ButtonGap) {
-                StatTile(
-                    label = "Last dose",
-                    value = status.lastAt?.let { Format.time(it, zone, use24) } ?: "None yet",
-                    detail = status.lastAt?.let { "${Format.duration((now - it) / 60_000)} ago" } ?: "in the last 2 days",
-                    modifier = Modifier.weight(1f),
-                )
-                StatTile(
-                    label = "Today",
-                    value = if (m.maxPerDay > 0) "${status.takenToday} of ${m.maxPerDay}" else "${status.takenToday}",
-                    detail = if (m.maxPerDay > 0) "your daily limit" else "doses",
-                    modifier = Modifier.weight(1f),
-                )
+            if (earlier == null) {
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = ButtonGap) {
+                    StatTile(
+                        label = "Last dose",
+                        value = status.lastAt?.let { Format.time(it, zone, use24) } ?: "None yet",
+                        detail = status.lastAt?.let { "${Format.duration((now - it) / 60_000)} ago" } ?: "in the last 2 days",
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatTile(
+                        label = "Today",
+                        value = if (m.maxPerDay > 0) "${status.takenToday} of ${m.maxPerDay}" else "${status.takenToday}",
+                        detail = if (m.maxPerDay > 0) "your daily limit" else "doses",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
-            if (status.tooSoon && nextAllowed != null) {
+            if (tooSoon && nextAllowed != null) {
                 Spacer(Modifier.height(10.dp))
                 Banner(
                     title = "Too soon. Wait until ${Format.time(nextAllowed, zone, use24)}",
                     text = "You set at least ${m.minGapHours} hours between doses.",
                     icon = RexiIcons.Clock,
                 )
-            } else if (status.limitReached) {
+            } else if (limitReached) {
                 Spacer(Modifier.height(10.dp))
                 Banner(title = "That's your limit for today", text = "You set at most ${m.maxPerDay} a day.", icon = RexiIcons.Clock)
             }
@@ -223,13 +247,18 @@ internal fun AsNeededSheet(
             ) {
                 Text("Taken at", style = Type.text, color = palette.muted)
                 Spacer(Modifier.width(8.dp))
-                Text(Format.time(takenAt, zone, use24), style = Type.body, color = palette.ink, modifier = Modifier.weight(1f))
-                TextAction("Change", { choosingTime = true })
+                Text(
+                    if (needsTime) "Choose a time" else Format.time(takenAt, zone, use24),
+                    style = Type.body,
+                    color = if (needsTime) palette.muted else palette.ink,
+                    modifier = Modifier.weight(1f),
+                )
+                TextAction(if (needsTime) "Choose" else "Change", { choosingTime = true })
             }
-            val todaysLogs = logs.filter { it.at >= startOfToday }
+            val todaysLogs = if (earlier == null) logs.filter { it.at >= startOfToday } else logs
             if (todaysLogs.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
-                Text("Logged today", style = Type.label, color = palette.muted)
+                Text(if (earlier == null) "Logged today" else "Logged that day", style = Type.label, color = palette.muted)
                 todaysLogs.sortedByDescending { it.at }.forEach { log ->
                     Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
                         val bits = listOf(Format.time(log.at, zone, use24), m.amount(log.amount), log.reason).filter { it.isNotBlank() }
@@ -243,11 +272,18 @@ internal fun AsNeededSheet(
             fun log() {
                 scope.launch {
                     app.repository.logAsNeeded(medId, takenAt, dose, reason.orEmpty())
-                    app.settings.setAsNeededReminder(medId, 0)
+                    if (earlier == null) app.settings.setAsNeededReminder(medId, 0)
                     close(scope, state, onDismiss)
                 }
             }
-            if (status.tooSoon && nextAllowed != null) {
+            if (needsTime) {
+                PrimaryButton(
+                    "Choose when you took it",
+                    { choosingTime = true },
+                    icon = RexiIcons.Clock,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (tooSoon && nextAllowed != null) {
                 PrimaryButton(
                     "Remind me at ${Format.time(nextAllowed, zone, use24)}",
                     {
@@ -259,7 +295,7 @@ internal fun AsNeededSheet(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlineButton("Log it anyway", ::log, modifier = Modifier.fillMaxWidth())
-            } else if (status.limitReached) {
+            } else if (limitReached) {
                 OutlineButton("Log it anyway", ::log, modifier = Modifier.fillMaxWidth())
             } else {
                 PrimaryButton("Log dose", ::log, icon = RexiIcons.Check, modifier = Modifier.fillMaxWidth())
@@ -268,7 +304,7 @@ internal fun AsNeededSheet(
         if (choosingTime) {
             TimeDialog(
                 title = "When did you take it?",
-                minutes = Format.minutesOfDay(takenAt, zone),
+                minutes = if (needsTime) NOON_MINUTES else Format.minutesOfDay(takenAt, zone),
                 onPick = {
                     pickedMinutes = it
                     choosingTime = false
@@ -299,14 +335,26 @@ private fun StatTile(
     }
 }
 
-/** For a dose that was marked as missed, or nobody answered: say when it was really taken. */
+/** The ways to say when a dose was taken, offered only when they make sense for its day. */
+private enum class When {
+    DUE,
+    NOW,
+    OTHER,
+}
+
+/**
+ * Answers a dose after the fact, on any day. Without [medId] it covers every dose in the compartment that is missed or
+ * still waiting, which is what Today and the missed notification ask about. With it, it covers that medicine's dose
+ * whatever its answer was, so History can correct the record.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun LogLateSheet(
+internal fun FixDoseSheet(
     app: RexiApp,
     day: LocalDate,
     part: DoseSlot,
     onDismiss: () -> Unit,
+    medId: Long? = null,
 ) {
     val palette = LocalPalette.current
     val scope = rememberCoroutineScope()
@@ -317,6 +365,7 @@ internal fun LogLateSheet(
     var book by remember { mutableStateOf<DoseActions.Book?>(null) }
     LaunchedEffect(day, part) { book = app.doses.book(day) }
     val now = remember { app.repository.now() }
+    val today = remember { Instant.ofEpochMilli(now).atZone(zone).toLocalDate() }
     val dueAt =
         settings.clock
             .dueAt(day, part)
@@ -329,9 +378,13 @@ internal fun LogLateSheet(
             .atZone(zone)
             .toInstant()
             .toEpochMilli()
-    val latest = minOf(now, dueAt + DAY_MS - 60_000)
-    var choice by remember { mutableIntStateOf(2) }
-    var other by remember { mutableLongStateOf(dueAt + (latest - dueAt) / 2 / FIVE_MIN_MS * FIVE_MIN_MS) }
+    val earliest = dueAt - DAY_MS / 2
+    val latest = minOf(now, dueAt + DAY_MS - 60_000).coerceAtLeast(earliest)
+    var choice by remember { mutableStateOf(When.OTHER) }
+    // Within a day of the dose, halfway to now is a fair guess. Past that, halfway would land on another day, so it
+    // starts from when the dose was due.
+    val guess = if (now < dueAt + DAY_MS) dueAt + (latest - dueAt) / 2 / FIVE_MIN_MS * FIVE_MIN_MS else dueAt
+    var other by remember { mutableLongStateOf(guess.coerceIn(earliest, latest)) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -341,15 +394,41 @@ internal fun LogLateSheet(
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
     ) {
         val current = book ?: return@ModalBottomSheet
-        val doses =
+        val all =
             current.view
                 .part(part)
                 ?.doses
                 .orEmpty()
-                .filter { it.state == DoseState.MISSED || it.pending }
+        val doses =
+            if (medId != null) {
+                all.filter { it.medId == medId && History.canChange(it) }
+            } else {
+                all.filter { it.state == DoseState.MISSED || it.pending }
+            }
+        val ids = doses.map { it.medId }
         val meds = doses.mapNotNull { current.medicines[it.medId] }
-        val wasMarked = doses.any { it.state == DoseState.MISSED && it.at != null }
-        val times = listOf(dueAt, now, other)
+        val single = doses.singleOrNull()
+        LaunchedEffect(single?.state, single?.at) {
+            val takenAt = single?.at
+            if (single?.state == DoseState.TAKEN && takenAt != null) other = takenAt.coerceIn(earliest, latest)
+        }
+        val choices =
+            When.entries.filter {
+                when (it) {
+                    When.DUE -> dueAt <= now
+                    When.NOW -> now < dueAt + DAY_MS
+                    When.OTHER -> true
+                }
+            }
+        val picked = if (choice in choices) choice else When.OTHER
+        val times = mapOf(When.DUE to dueAt, When.NOW to now, When.OTHER to other)
+
+        fun answer(action: suspend () -> Unit) {
+            scope.launch {
+                action()
+                close(scope, state, onDismiss)
+            }
+        }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -369,8 +448,10 @@ internal fun LogLateSheet(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val label = if (part is DayPart) part.label else "Scheduled"
+                    val on = if (day == today) "" else " ${Format.day(day)}"
                     Text(
-                        "${if (part is DayPart) part.label else "Scheduled"} dose, due at ${Format.time(settings.minutes(part), use24)}",
+                        "$label dose, due$on at ${Format.time(settings.minutes(part), use24)}",
                         style = Type.text,
                         color = palette.muted,
                     )
@@ -382,25 +463,47 @@ internal fun LogLateSheet(
                 Text("Nothing left to log for this dose.", style = Type.text, color = palette.muted)
                 return@Column
             }
-            if (wasMarked) {
+            val takenAt = single?.at
+            val badge =
+                when {
+                    single?.state == DoseState.TAKEN && takenAt != null -> {
+                        "Taken at ${Format.time(takenAt, zone, use24)}" to false
+                    }
+
+                    single?.state == DoseState.SKIPPED -> {
+                        "Skipped" + single.reason.let { if (it.isBlank()) "" else ", ${it.lowercase()}" } to
+                            true
+                    }
+
+                    doses.any { it.state == DoseState.MISSED && it.at != null } -> {
+                        "Marked as missed at ${Format.time(missedAt, zone, use24)}" to
+                            true
+                    }
+
+                    else -> {
+                        null
+                    }
+                }
+            if (badge != null) {
+                val (text, alert) = badge
                 Spacer(Modifier.height(14.dp))
                 Box(
                     Modifier
                         .height(28.dp)
                         .clip(CircleShape)
-                        .background(palette.alertSoft)
+                        .background(if (alert) palette.alertSoft else palette.well)
                         .padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("Marked as missed at ${Format.time(missedAt, zone, use24)}", style = Type.label, color = palette.alertText)
+                    Text(text, style = Type.label, color = if (alert) palette.alertText else palette.ink)
                 }
             }
             Spacer(Modifier.height(20.dp))
             Text("When did you take it?", style = Type.body, color = palette.ink)
             Spacer(Modifier.height(10.dp))
             Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("When it was due", "Just now", "Another time").forEachIndexed { index, label ->
-                    val on = choice == index
+                choices.forEach { option ->
+                    val on = picked == option
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -408,16 +511,26 @@ internal fun LogLateSheet(
                             .clip(RoundedCornerShape(18.dp))
                             .background(if (on) palette.surface else palette.well)
                             .border(2.dp, if (on) palette.ink else palette.well, RoundedCornerShape(18.dp))
-                            .selectable(selected = on, role = Role.RadioButton) { choice = index }
+                            .selectable(selected = on, role = Role.RadioButton) { choice = option }
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(label, style = Type.body, color = palette.ink, modifier = Modifier.weight(1f))
-                        if (index < 2) Text(Format.time(times[index], zone, use24), style = Type.body, color = palette.muted)
+                        val text =
+                            when (option) {
+                                When.DUE -> "When it was due"
+                                When.NOW -> "Just now"
+                                When.OTHER -> "Another time"
+                            }
+                        Text(text, style = Type.body, color = palette.ink, modifier = Modifier.weight(1f))
+                        if (option !=
+                            When.OTHER
+                        ) {
+                            Text(Format.time(times.getValue(option), zone, use24), style = Type.body, color = palette.muted)
+                        }
                     }
                 }
             }
-            if (choice == 2) {
+            if (picked == When.OTHER) {
                 Spacer(Modifier.height(10.dp))
                 Row(
                     Modifier
@@ -430,7 +543,7 @@ internal fun LogLateSheet(
                 ) {
                     Stepper(
                         value = Format.time(other, zone, use24),
-                        onMinus = { other = (other - FIVE_MIN_MS).coerceAtLeast(dueAt - DAY_MS / 2) },
+                        onMinus = { other = (other - FIVE_MIN_MS).coerceAtLeast(earliest) },
                         onPlus = { other = (other + FIVE_MIN_MS).coerceAtMost(latest) },
                         minusLabel = "5 minutes earlier",
                         plusLabel = "5 minutes later",
@@ -441,30 +554,21 @@ internal fun LogLateSheet(
                 }
             }
             Spacer(Modifier.height(24.dp))
+            val at = times.getValue(picked)
+            val atDay = Instant.ofEpochMilli(at).atZone(zone).toLocalDate()
             PrimaryButton(
-                "Log it at ${Format.time(times[choice], zone, use24)}",
-                {
-                    scope.launch {
-                        app.doses.take(day, part, at = times[choice], includeMissed = true)
-                        close(scope, state, onDismiss)
-                    }
-                },
+                "Log it at ${Format.time(at, zone, use24)}" + if (atDay == day) "" else ", ${Format.day(atDay)}",
+                { answer { app.doses.takeAt(day, part, ids, at) } },
                 icon = RexiIcons.Check,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(4.dp))
-            TextAction(
-                "I didn't take it",
-                {
-                    scope.launch {
-                        doses.filter { it.pending }.forEach { app.repository.markMissed(it.medId, day, part, it.amount) }
-                        app.notifier.cancelMissed(day, part)
-                        app.notifier.cancelDose(day, part)
-                        close(scope, state, onDismiss)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                if (doses.any { it.state != DoseState.SKIPPED }) {
+                    TextAction("I skipped it", { answer { app.doses.skipThese(day, part, ids) } })
+                }
+                TextAction("I didn't take it", { answer { app.doses.notTaken(day, part, ids) } })
+            }
         }
     }
 }
@@ -472,4 +576,5 @@ internal fun LogLateSheet(
 private val REASONS = listOf("Headache", "Pain", "Fever", "Other")
 private const val DAY_MS = 86_400_000L
 private const val FIVE_MIN_MS = 5 * 60_000L
+private const val NOON_MINUTES = 12 * 60
 private const val MAX_AMOUNT = 20.0

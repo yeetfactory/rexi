@@ -63,10 +63,10 @@ import top.yeetfactory.rexi.remind.RexiReceiver
 import top.yeetfactory.rexi.ui.AddFlow
 import top.yeetfactory.rexi.ui.AsNeededSheet
 import top.yeetfactory.rexi.ui.EditMedicine
+import top.yeetfactory.rexi.ui.FixDoseSheet
 import top.yeetfactory.rexi.ui.HistoryScreen
 import top.yeetfactory.rexi.ui.LocalPalette
 import top.yeetfactory.rexi.ui.LockScreen
-import top.yeetfactory.rexi.ui.LogLateSheet
 import top.yeetfactory.rexi.ui.MedDetailScreen
 import top.yeetfactory.rexi.ui.MedsScreen
 import top.yeetfactory.rexi.ui.Onboarding
@@ -405,7 +405,11 @@ private fun Home(
                         }
 
                         Tab.HISTORY -> {
-                            HistoryScreen(app)
+                            HistoryScreen(
+                                app,
+                                onFix = { day, part, medId -> sheet = "late:${day.toEpochDay()}:${part.key}:$medId" },
+                                onLogDose = { medId, day -> sheet = "prn:$medId:${day.toEpochDay()}" },
+                            )
                         }
 
                         Tab.SETTINGS -> {
@@ -423,13 +427,19 @@ private fun Home(
         val bits = current.split(":")
         when (bits[0]) {
             "prn" -> {
-                AsNeededSheet(app, bits.getOrNull(1)?.toLongOrNull() ?: 0L, onDismiss = { sheet = null })
+                AsNeededSheet(
+                    app,
+                    bits.getOrNull(1)?.toLongOrNull() ?: 0L,
+                    onDismiss = { sheet = null },
+                    day = bits.getOrNull(2)?.toLongOrNull()?.let(LocalDate::ofEpochDay),
+                )
             }
 
             "late" -> {
                 val day = bits.getOrNull(1)?.toLongOrNull()?.let(LocalDate::ofEpochDay)
                 val part = bits.getOrNull(2)?.let(DoseSlot::fromKey)
-                if (day != null && part != null) LogLateSheet(app, day, part, onDismiss = { sheet = null }) else sheet = null
+                val medId = bits.getOrNull(3)?.toLongOrNull()
+                if (day != null && part != null) FixDoseSheet(app, day, part, onDismiss = { sheet = null }, medId = medId) else sheet = null
             }
 
             else -> {
