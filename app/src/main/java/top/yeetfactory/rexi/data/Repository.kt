@@ -179,6 +179,36 @@ class Repository(
         return written
     }
 
+    /**
+     * The person says a dose wasn't taken. Unlike [markMissed] this is their answer, so it replaces whatever was there,
+     * and a dose that had been taken goes back on the count.
+     */
+    suspend fun notTaken(
+        medId: Long,
+        day: LocalDate,
+        part: DoseSlot,
+        amount: Double,
+    ) {
+        db.withTransaction {
+            val previous = dao.log(medId, day.toEpochDay(), part)
+            if (previous?.status == DoseStatus.MISSED) return@withTransaction
+            dao.upsert(
+                DoseLog(
+                    id = previous?.id ?: 0,
+                    medicineId = medId,
+                    day = day.toEpochDay(),
+                    part = part,
+                    status = DoseStatus.MISSED,
+                    at = clock(),
+                    amount = previous?.amount ?: amount,
+                    historical = previous?.historical == true,
+                ),
+            )
+            if (previous?.status == DoseStatus.TAKEN && !previous.historical) adjustCount(medId, previous.amount)
+        }
+        onChange()
+    }
+
     suspend fun undo(
         medId: Long,
         day: LocalDate,

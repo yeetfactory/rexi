@@ -1,7 +1,9 @@
 package top.yeetfactory.rexi.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 
@@ -108,6 +110,29 @@ class DayBookTest {
         val view = DayBook.build(day, plans, logs, at(23, 30), clock)
         assertEquals(CellState.MISSED, History.cell(view.part(DayPart.MORNING)))
         assertEquals(CellState.NONE, History.cell(view.part(DayPart.NIGHT)))
+    }
+
+    @Test fun `a dose is overdue from the moment it would count as missed`() {
+        assertFalse(clock.isOverdue(day, DayPart.AFTERNOON, at(16, 59)))
+        assertTrue(clock.isOverdue(day, DayPart.AFTERNOON, at(17, 0)))
+        assertFalse(clock.isOverdue(day.minusDays(1), DayPart.NIGHT, at(0, 59)))
+        assertTrue(clock.isOverdue(day.minusDays(1), DayPart.NIGHT, at(1, 0)))
+    }
+
+    @Test fun `history can change any dose whose time has come, but not one still to come`() {
+        val logs =
+            listOf(
+                Logged(1, day, DayPart.MORNING, DoseStatus.TAKEN, 0, 1.0),
+                Logged(2, day, DayPart.AFTERNOON, DoseStatus.SKIPPED, 0, 1.0),
+            )
+        val view = DayBook.build(day, plans, logs, at(21, 30), clock)
+        val states = view.parts.flatMap { it.doses }.associate { it.state to History.canChange(it) }
+        assertEquals(
+            mapOf(DoseState.TAKEN to true, DoseState.SKIPPED to true, DoseState.DUE to true),
+            states,
+        )
+        val tomorrow = DayBook.build(day.plusDays(1), plans, emptyList(), at(21, 30), clock)
+        assertTrue(tomorrow.parts.flatMap { it.doses }.none(History::canChange))
     }
 
     @Test fun `weeks start on Monday`() {

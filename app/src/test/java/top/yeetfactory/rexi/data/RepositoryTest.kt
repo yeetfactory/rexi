@@ -96,6 +96,40 @@ class RepositoryTest {
             assertEquals(DoseStatus.TAKEN, db.dao().log(id, day.toEpochDay(), DayPart.MORNING)!!.status)
         }
 
+    @Test fun `a missed dose from an earlier day can be logged as taken later, and comes off the count`() =
+        runTest {
+            val id = tablets(10.0)
+            val earlier = day.minusDays(2)
+            repository.markMissed(id, earlier, DayPart.MORNING, 1.0)
+            repository.take(id, earlier, DayPart.MORNING, 500, 1.0)
+            val log = db.dao().log(id, earlier.toEpochDay(), DayPart.MORNING)!!
+            assertEquals(DoseStatus.TAKEN, log.status)
+            assertEquals(500L, log.at)
+            assertEquals(9.0, count(id), 0.0)
+        }
+
+    @Test fun `saying a taken dose wasn't taken keeps it as missed and gives the tablet back`() =
+        runTest {
+            val id = tablets(10.0)
+            repository.take(id, day, DayPart.MORNING, 500, 1.0)
+            repository.notTaken(id, day, DayPart.MORNING, 1.0)
+            repository.notTaken(id, day, DayPart.MORNING, 1.0)
+            assertEquals(DoseStatus.MISSED, db.dao().log(id, day.toEpochDay(), DayPart.MORNING)!!.status)
+            assertEquals(10.0, count(id), 0.0)
+            assertFalse(repository.markMissed(id, day, DayPart.MORNING, 1.0))
+        }
+
+    @Test fun `a skipped dose can be said not taken, and an unanswered one is written down as missed`() =
+        runTest {
+            val id = tablets(10.0)
+            repository.skip(id, day, DayPart.MORNING, 1.0)
+            repository.notTaken(id, day, DayPart.MORNING, 1.0)
+            repository.notTaken(id, day, DayPart.EVENING, 1.0)
+            assertEquals(DoseStatus.MISSED, db.dao().log(id, day.toEpochDay(), DayPart.MORNING)!!.status)
+            assertEquals(DoseStatus.MISSED, db.dao().log(id, day.toEpochDay(), DayPart.EVENING)!!.status)
+            assertEquals(10.0, count(id), 0.0)
+        }
+
     @Test fun `a spray tracked by time keeps no count`() =
         runTest {
             val id =
